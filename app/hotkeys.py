@@ -4,7 +4,7 @@ Monitors Right Option (keycode 61) for:
 - Hold-to-talk: key_down -> on_start(), key_up -> on_stop()
 - Double-tap toggle: two key_downs within 300ms -> enters toggle mode, next tap -> on_stop()
 
-Requires Accessibility permission in System Preferences.
+Requires Input Monitoring permission in System Settings > Privacy & Security.
 """
 
 import logging
@@ -12,6 +12,7 @@ import threading
 import time
 from typing import Callable
 
+import AppKit
 import Quartz
 
 logger = logging.getLogger(__name__)
@@ -52,6 +53,12 @@ class HotkeyManager:
 
     def _callback(self, proxy, event_type, event, refcon):
         """CGEventTap callback — runs on the CFRunLoop thread."""
+        # macOS disables event taps that are slow to respond — re-enable
+        if event_type == Quartz.kCGEventTapDisabledByTimeout:
+            logger.warning("Event tap disabled by timeout — re-enabling")
+            Quartz.CGEventTapEnable(self._tap, True)
+            return event
+
         # We monitor flagsChanged for modifier keys like Option
         if event_type == _FLAGS_CHANGED:
             flags = Quartz.CGEventGetFlags(event)
@@ -108,8 +115,30 @@ class HotkeyManager:
             self.on_stop()
         # In toggle mode, release is ignored
 
+    def _wait_for_input_monitoring(self) -> bool:
+        """Request Input Monitoring permission and poll until granted."""
+        if Quartz.CGPreflightListenEventAccess():
+            return True
+
+        logger.info("Requesting Input Monitoring permission...")
+        Quartz.CGRequestListenEventAccess()
+        self._show_permission_alert()
+
+        # Poll every 2 seconds for up to 2 minutes
+        for _ in range(60):
+            time.sleep(2)
+            if Quartz.CGPreflightListenEventAccess():
+                logger.info("Input Monitoring permission granted")
+                return True
+
+        logger.error("Timed out waiting for Input Monitoring permission")
+        return False
+
     def _run_loop(self):
         """Create event tap and run the CFRunLoop (blocking)."""
+        if not self._wait_for_input_monitoring():
+            return
+
         mask = Quartz.CGEventMaskBit(_FLAGS_CHANGED)
 
         self._tap = Quartz.CGEventTapCreate(
@@ -122,11 +151,8 @@ class HotkeyManager:
         )
 
         if self._tap is None:
-            logger.error(
-                "Failed to create event tap. "
-                "Grant Accessibility permission in System Preferences > "
-                "Privacy & Security > Accessibility."
-            )
+            logger.error("Failed to create event tap")
+            self._show_permission_alert()
             return
 
         run_loop_source = Quartz.CFMachPortCreateRunLoopSource(None, self._tap, 0)
@@ -150,6 +176,35 @@ class HotkeyManager:
         self._active = False
         self._toggle_mode = False
         self._option_held = False
+
+    def _show_permission_alert(self):
+        """Show a user-visible alert when Input Monitoring permission is missing."""
+        def show():
+            try:
+                alert = AppKit.NSAlert.alloc().init()
+                alert.setMessageText_("Yap needs Input Monitoring permission")
+                alert.setInformativeText_(
+                    "Hotkey detection requires Input Monitoring access.\n\n"
+                    "To fix:\n"
+                    "1. Open System Settings > Privacy & Security > Input Monitoring\n"
+                    "2. Find 'Yap' and toggle it ON\n"
+                    "3. If already ON, toggle it OFF then ON again\n\n"
+                    "Yap will activate automatically once permission is granted."
+                )
+                alert.setAlertStyle_(AppKit.NSAlertStyleWarning)
+                alert.addButtonWithTitle_("Open System Settings")
+                alert.addButtonWithTitle_("OK")
+                response = alert.runModal()
+                if response == AppKit.NSAlertFirstButtonReturn:
+                    AppKit.NSWorkspace.sharedWorkspace().openURL_(
+                        AppKit.NSURL.URLWithString_(
+                            "x-apple.systempreferences:com.apple.preference.security"
+                            "?Privacy_ListenEvent"
+                        )
+                    )
+            except Exception:
+                logger.exception("Failed to show permission alert")
+        AppKit.NSOperationQueue.mainQueue().addOperationWithBlock_(show)
 
     def stop(self):
         """Stop the event tap and run loop."""

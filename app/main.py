@@ -1,15 +1,17 @@
 """Yap — macOS menubar dictation app."""
 
 import collections
+import fcntl
 import logging
 import subprocess
+import sys
 import threading
 
 import AppKit
 import rumps
 
 from app.cleanup import create_cleanup
-from app.config import CONFIG_FILE, VOCAB_FILE, load_config
+from app.config import CONFIG_DIR, CONFIG_FILE, VOCAB_FILE, load_config
 from app.hotkeys import HotkeyManager
 from app.overlay import OverlayState, RecordingOverlay
 from app.paster import paste
@@ -218,23 +220,44 @@ class YapApp(rumps.App):
         self.hotkey_mgr.start()
         logger.info("Hotkey manager started")
 
-        # Check for missing API keys after startup
+        # Check for missing API keys after startup — auto-open settings
         if not self.cfg.mistral_api_key:
-            rumps.notification(
-                "Yap",
-                "Missing API Key",
-                "Mistral API key not set. Opening Settings...",
-            )
+            logger.warning("Mistral API key not set — opening Settings")
             self._open_settings(None)
 
 
 
+_lock_file = None
+
+
+def _acquire_single_instance_lock():
+    """Ensure only one instance of Yap is running. Exits if another is found."""
+    global _lock_file
+    lock_path = CONFIG_DIR / ".yap.lock"
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    _lock_file = open(lock_path, "w")
+    try:
+        fcntl.flock(_lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print("Yap is already running.", file=sys.stderr)
+        sys.exit(0)
+
+
 def main():
+    # Log to file when running as a bundle (no terminal to see stdout)
+    log_file = CONFIG_DIR / "yap.log" if getattr(sys, "_MEIPASS", None) else None
+    handlers = []
+    if log_file:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        handlers.append(logging.FileHandler(log_file, mode="w"))
+    handlers.append(logging.StreamHandler())
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(name)s] %(message)s",
         datefmt="%H:%M:%S",
+        handlers=handlers,
     )
+    _acquire_single_instance_lock()
     app = YapApp()
     app.run()
 
