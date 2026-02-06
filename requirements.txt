@@ -1,0 +1,9 @@
+sounddevice
+soundfile
+numpy
+mistralai
+groq
+rumps
+python-dotenv
+pyobjc-framework-Quartz
+pyobjc-framework-Cocoa

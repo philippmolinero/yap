@@ -1,0 +1,19 @@
+[hotkey]
+keycode = 61                  # Right Option
+double_tap_ms = 300
+
+[transcription]
+model = "voxtral-mini-latest"
+sample_rate = 16000
+
+[cleanup]
+enabled = true
+provider = "groq"
+model = "llama-3.3-70b-versatile"
+
+[paste]
+delay_ms = 50
+
+[silence]
+timeout = 5.0               # seconds of silence before auto-stop (0 = disabled)
+threshold = 0.008            # RMS level below this counts as silence
