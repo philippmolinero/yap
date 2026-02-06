@@ -9,6 +9,7 @@ a = Analysis(
         ("config/default.toml", "config"),
         ("config/vocabulary.txt", "config"),
         ("assets/icon_menubar.png", "assets"),
+        ("assets/icon_app.png", "assets"),
     ],
     hiddenimports=[
         "rumps",
@@ -60,7 +61,7 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name="Yap.app",
-    icon="assets/icon_menubar.png",
+    icon="assets/icon_app.png",
     bundle_identifier="com.yap.dictation",
     info_plist={
         "CFBundleName": "Yap",
