@@ -12,19 +12,42 @@ Yap is a lightweight macOS menubar app for voice dictation. Hold Right Option to
 - Build: `./build.sh` (creates dist/Yap.app), `./create_dmg.sh` (creates DMG)
 - Config: `~/.config/yap/config.toml` (user), `config/default.toml` (bundled defaults)
 - Secrets: `~/.config/yap/secrets.toml` (API keys, managed via Settings dialog)
+- Logs: `~/.config/yap/yap.log` (bundled app only, overwritten each launch)
 - Env vars: `MISTRAL_API_KEY`, `GROQ_API_KEY` in `.env` (dev fallback)
 
 ## Architecture
 - Pipeline: hotkey → recorder → transcriber (Voxtral) → cleanup (Groq) → paster (pbcopy + Cmd+V)
 - UI: rumps menubar app + frosted glass overlay (AppKit/NSVisualEffectView) + settings dialog (NSWindow)
 - Hotkeys: Quartz CGEventTap on Right Option (hold-to-talk + double-tap toggle)
-- Resources: `app/resources.py` resolves paths for both dev mode and py2app bundles
-- Packaging: py2app via `setup.py`, entry point `run.py`, build scripts in project root
+- Resources: `app/resources.py` resolves paths for both dev mode and PyInstaller bundles (`sys._MEIPASS`)
+- Packaging: PyInstaller via `yap.spec`, entry point `run.py`, build scripts in project root
+- Single instance: `fcntl.flock` on `~/.config/yap/.yap.lock`
+
+## macOS Permissions (CRITICAL)
+Three separate permissions are required. Getting these wrong causes silent failures.
+
+| Permission | System Settings Panel | What it's for | API to check |
+|---|---|---|---|
+| Input Monitoring | Privacy & Security > Input Monitoring | CGEventTap hotkey listening | `CGPreflightListenEventAccess()` |
+| Microphone | Privacy & Security > Microphone | Audio recording | macOS prompts automatically |
+| Accessibility | Privacy & Security > Accessibility | Paste via Cmd+V (osascript) | `AXIsProcessTrusted()` |
+
+- **Input Monitoring ≠ Accessibility**: `kCGEventTapOptionListenOnly` requires Input Monitoring, NOT Accessibility. `AXIsProcessTrustedWithOptions` checks Accessibility only — do NOT use it for event taps.
+- **Use `CGPreflightListenEventAccess()` / `CGRequestListenEventAccess()`** (in `Quartz`) to check/request Input Monitoring.
+- **`CGEventTapCreate` returns non-None even without permission** — events just silently never arrive. Always check `CGPreflightListenEventAccess()` first.
+- **`ApplicationServices` module not bundled by PyInstaller** — access functions through `Quartz` or `ctypes` instead.
+- **Terminal inherits permissions**: Running from Terminal works because Terminal has its own Input Monitoring grant. Finder-launched apps need their own.
+- **TCC entries go stale on rebuild**: Ad-hoc signed PyInstaller apps get new signatures each build. Fix: `tccutil reset ListenEvent com.yap.dictation`.
+- **`com.apple.provenance` is immutable on macOS 26**: `xattr -cr` cannot remove it. Don't waste time trying.
+- **Event tap timeout**: macOS disables slow taps. Handle `kCGEventTapDisabledByTimeout` in callback and re-enable.
+- The app polls `CGPreflightListenEventAccess()` every 2s so it auto-activates after the user grants Input Monitoring — no relaunch needed.
 
 ## Critical Gotchas
 - **PyObjC + exceptions**: Python exceptions inside `addOperationWithBlock_` crash the app (SIGABRT). Never let exceptions escape blocks dispatched to `NSOperationQueue.mainQueue()`.
-- **rumps MenuItem**: Inherits from `OrderedDict` — use `menu[key] = MenuItem(...)` to add sub-items, NOT `.add()`. `menu.clear()` crashes if submenu NSMenu hasn't been created yet (no items added); delete by key instead.
+- **NSObject for button targets**: Plain Python classes can't be `setTarget_()` targets. Use an NSObject subclass with `@objc.IBAction` methods.
+- **rumps MenuItem**: Inherits from `OrderedDict` — use `menu[key] = MenuItem(...)` to add sub-items, NOT `.add()`. `menu.clear()` crashes if submenu NSMenu hasn't been created yet; delete by key instead.
 - **rumps callback visibility**: `set_callback(None)` greys out a menu item, `set_callback(fn)` re-enables it.
+- **rumps.notification unreliable**: macOS notification permissions for bundled Python apps are often suppressed. Use in-window feedback instead.
 - **Thread safety**: `_on_silence` fires from sounddevice audio callback thread. Always dispatch UI work to main queue. `NSSound.play()/stop()` are thread-safe.
 
 ## Code Style
@@ -35,7 +58,9 @@ Yap is a lightweight macOS menubar app for voice dictation. Hold Right Option to
 
 ## Development
 - Working directory may be `~/Lab/personal/` (parent), not the project root — use full paths or `git -C` for git commands
-- No test suite yet — verify manually with `python3 -m app.main`
+- Tests: `pytest tests/` — 33 tests covering config, resources, settings dialog, integration
+- Debug bundled app: check `~/.config/yap/yap.log`
+- After rebuilding, reset stale TCC: `tccutil reset ListenEvent com.yap.dictation`
 
 ## Git
 - Personal repo under `philippmolinero` GitHub account
