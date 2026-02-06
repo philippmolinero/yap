@@ -1,0 +1,340 @@
+"""Tests for app.config — config loading, migration, secrets."""
+
+import os
+import shutil
+import textwrap
+from pathlib import Path
+from unittest import mock
+
+import pytest
+
+
+@pytest.fixture
+def config_dir(tmp_path):
+    """Create a temporary config directory structure."""
+    d = tmp_path / "yap"
+    d.mkdir()
+    return d
+
+
+@pytest.fixture
+def old_config_dir(tmp_path):
+    """Create a temporary old config directory with files."""
+    d = tmp_path / "voxtral-dictation"
+    d.mkdir()
+    (d / "config.toml").write_text("[hotkey]\nkeycode = 61\n")
+    (d / "vocabulary.txt").write_text("Claude Code\nAnthopic\n")
+    return d
+
+
+class TestMigrateConfigDir:
+    """Config directory migration from voxtral-dictation to yap."""
+
+    def test_migrates_when_old_exists_and_new_does_not(self, tmp_path, old_config_dir):
+        new_dir = tmp_path / "yap"
+        assert not new_dir.exists()
+
+        with mock.patch("app.config._OLD_CONFIG_DIR", old_config_dir), \
+             mock.patch("app.config.CONFIG_DIR", new_dir):
+            from app.config import _migrate_config_dir
+
+            _migrate_config_dir()
+
+        assert new_dir.exists()
+        assert (new_dir / "config.toml").exists()
+        assert (new_dir / "vocabulary.txt").exists()
+        assert not old_config_dir.exists()
+
+    def test_no_migration_when_new_exists(self, tmp_path, old_config_dir):
+        new_dir = tmp_path / "yap"
+        new_dir.mkdir()
+        (new_dir / "config.toml").write_text("[hotkey]\nkeycode = 99\n")
+
+        with mock.patch("app.config._OLD_CONFIG_DIR", old_config_dir), \
+             mock.patch("app.config.CONFIG_DIR", new_dir):
+            from app.config import _migrate_config_dir
+
+            _migrate_config_dir()
+
+        # New dir untouched, old dir still exists
+        assert (new_dir / "config.toml").read_text() == "[hotkey]\nkeycode = 99\n"
+        assert old_config_dir.exists()
+
+    def test_no_migration_when_old_does_not_exist(self, tmp_path):
+        old_dir = tmp_path / "voxtral-dictation"
+        new_dir = tmp_path / "yap"
+
+        with mock.patch("app.config._OLD_CONFIG_DIR", old_dir), \
+             mock.patch("app.config.CONFIG_DIR", new_dir):
+            from app.config import _migrate_config_dir
+
+            _migrate_config_dir()
+
+        assert not new_dir.exists()
+
+
+class TestSecrets:
+    """Secrets loading and saving."""
+
+    def test_load_secrets_empty_when_no_file(self, tmp_path):
+        secrets_file = tmp_path / "secrets.toml"
+
+        with mock.patch("app.config.SECRETS_FILE", secrets_file):
+            from app.config import _load_secrets
+
+            result = _load_secrets()
+
+        assert result == {}
+
+    def test_load_secrets_from_file(self, tmp_path):
+        secrets_file = tmp_path / "secrets.toml"
+        secrets_file.write_text(textwrap.dedent("""\
+            [api_keys]
+            mistral = "sk-test-mistral"
+            groq = "gsk-test-groq"
+        """))
+
+        with mock.patch("app.config.SECRETS_FILE", secrets_file):
+            from app.config import _load_secrets
+
+            result = _load_secrets()
+
+        assert result["mistral"] == "sk-test-mistral"
+        assert result["groq"] == "gsk-test-groq"
+
+    def test_load_secrets_handles_invalid_toml(self, tmp_path):
+        secrets_file = tmp_path / "secrets.toml"
+        secrets_file.write_text("this is not valid toml {{{")
+
+        with mock.patch("app.config.SECRETS_FILE", secrets_file):
+            from app.config import _load_secrets
+
+            result = _load_secrets()
+
+        assert result == {}
+
+    def test_save_secrets(self, tmp_path):
+        secrets_file = tmp_path / "secrets.toml"
+        config_dir = tmp_path / "yap"
+        config_dir.mkdir()
+
+        with mock.patch("app.config.SECRETS_FILE", secrets_file), \
+             mock.patch("app.config.CONFIG_DIR", config_dir):
+            from app.config import save_secrets
+
+            save_secrets(mistral_api_key="sk-abc", groq_api_key="gsk-xyz")
+
+        content = secrets_file.read_text()
+        assert 'mistral = "sk-abc"' in content
+        assert 'groq = "gsk-xyz"' in content
+
+    def test_save_secrets_file_permissions(self, tmp_path):
+        secrets_file = tmp_path / "secrets.toml"
+        config_dir = tmp_path / "yap"
+        config_dir.mkdir()
+
+        with mock.patch("app.config.SECRETS_FILE", secrets_file), \
+             mock.patch("app.config.CONFIG_DIR", config_dir):
+            from app.config import save_secrets
+
+            save_secrets(mistral_api_key="sk-abc", groq_api_key="gsk-xyz")
+
+        import stat
+        mode = secrets_file.stat().st_mode
+        assert mode & stat.S_IROTH == 0, "secrets.toml should not be world-readable"
+        assert mode & stat.S_IWOTH == 0, "secrets.toml should not be world-writable"
+
+    def test_save_secrets_escapes_special_chars(self, tmp_path):
+        secrets_file = tmp_path / "secrets.toml"
+        config_dir = tmp_path / "yap"
+        config_dir.mkdir()
+
+        with mock.patch("app.config.SECRETS_FILE", secrets_file), \
+             mock.patch("app.config.CONFIG_DIR", config_dir):
+            from app.config import save_secrets, _load_secrets
+
+            save_secrets(mistral_api_key='key-with"quote', groq_api_key="key-with\\slash")
+            result = _load_secrets()
+
+        assert result["mistral"] == 'key-with"quote'
+        assert result["groq"] == "key-with\\slash"
+
+    def test_save_then_load_roundtrip(self, tmp_path):
+        secrets_file = tmp_path / "secrets.toml"
+        config_dir = tmp_path / "yap"
+        config_dir.mkdir()
+
+        with mock.patch("app.config.SECRETS_FILE", secrets_file), \
+             mock.patch("app.config.CONFIG_DIR", config_dir):
+            from app.config import save_secrets, _load_secrets
+
+            save_secrets(mistral_api_key="sk-roundtrip", groq_api_key="gsk-roundtrip")
+            result = _load_secrets()
+
+        assert result["mistral"] == "sk-roundtrip"
+        assert result["groq"] == "gsk-roundtrip"
+
+
+class TestLoadConfig:
+    """Full config loading with secrets + env var precedence."""
+
+    def test_secrets_take_precedence_over_env(self, tmp_path):
+        config_dir = tmp_path / "yap"
+        config_dir.mkdir()
+        config_file = config_dir / "config.toml"
+        secrets_file = config_dir / "secrets.toml"
+
+        # Copy bundled config
+        shutil.copy(
+            Path(__file__).parent.parent / "config" / "default.toml",
+            config_file,
+        )
+
+        secrets_file.write_text(textwrap.dedent("""\
+            [api_keys]
+            mistral = "sk-from-secrets"
+            groq = "gsk-from-secrets"
+        """))
+
+        env = {
+            "MISTRAL_API_KEY": "sk-from-env",
+            "GROQ_API_KEY": "gsk-from-env",
+        }
+
+        with mock.patch("app.config.CONFIG_DIR", config_dir), \
+             mock.patch("app.config.CONFIG_FILE", config_file), \
+             mock.patch("app.config.SECRETS_FILE", secrets_file), \
+             mock.patch("app.config.VOCAB_FILE", config_dir / "vocabulary.txt"), \
+             mock.patch.dict(os.environ, env):
+            from app.config import load_config
+
+            cfg = load_config()
+
+        assert cfg.mistral_api_key == "sk-from-secrets"
+        assert cfg.groq_api_key == "gsk-from-secrets"
+
+    def test_env_fallback_when_no_secrets(self, tmp_path):
+        config_dir = tmp_path / "yap"
+        config_dir.mkdir()
+        config_file = config_dir / "config.toml"
+        secrets_file = config_dir / "secrets.toml"
+
+        shutil.copy(
+            Path(__file__).parent.parent / "config" / "default.toml",
+            config_file,
+        )
+
+        env = {
+            "MISTRAL_API_KEY": "sk-from-env",
+            "GROQ_API_KEY": "gsk-from-env",
+        }
+
+        with mock.patch("app.config.CONFIG_DIR", config_dir), \
+             mock.patch("app.config.CONFIG_FILE", config_file), \
+             mock.patch("app.config.SECRETS_FILE", secrets_file), \
+             mock.patch("app.config.VOCAB_FILE", config_dir / "vocabulary.txt"), \
+             mock.patch.dict(os.environ, env):
+            from app.config import load_config
+
+            cfg = load_config()
+
+        assert cfg.mistral_api_key == "sk-from-env"
+        assert cfg.groq_api_key == "gsk-from-env"
+
+    def test_empty_secrets_falls_back_to_env(self, tmp_path):
+        config_dir = tmp_path / "yap"
+        config_dir.mkdir()
+        config_file = config_dir / "config.toml"
+        secrets_file = config_dir / "secrets.toml"
+
+        shutil.copy(
+            Path(__file__).parent.parent / "config" / "default.toml",
+            config_file,
+        )
+
+        # Secrets file exists but keys are empty
+        secrets_file.write_text(textwrap.dedent("""\
+            [api_keys]
+            mistral = ""
+            groq = ""
+        """))
+
+        env = {
+            "MISTRAL_API_KEY": "sk-from-env",
+            "GROQ_API_KEY": "gsk-from-env",
+        }
+
+        with mock.patch("app.config.CONFIG_DIR", config_dir), \
+             mock.patch("app.config.CONFIG_FILE", config_file), \
+             mock.patch("app.config.SECRETS_FILE", secrets_file), \
+             mock.patch("app.config.VOCAB_FILE", config_dir / "vocabulary.txt"), \
+             mock.patch.dict(os.environ, env):
+            from app.config import load_config
+
+            cfg = load_config()
+
+        assert cfg.mistral_api_key == "sk-from-env"
+        assert cfg.groq_api_key == "gsk-from-env"
+
+    def test_config_defaults(self, tmp_path):
+        """Config uses correct defaults when TOML is empty."""
+        config_dir = tmp_path / "yap"
+        config_dir.mkdir()
+        config_file = config_dir / "config.toml"
+        config_file.write_text("")  # empty TOML
+
+        with mock.patch("app.config.CONFIG_DIR", config_dir), \
+             mock.patch("app.config.CONFIG_FILE", config_file), \
+             mock.patch("app.config.SECRETS_FILE", config_dir / "secrets.toml"), \
+             mock.patch("app.config.VOCAB_FILE", config_dir / "vocabulary.txt"), \
+             mock.patch.dict(os.environ, {}, clear=False):
+            from app.config import load_config
+
+            cfg = load_config()
+
+        assert cfg.hotkey.keycode == 61
+        assert cfg.hotkey.double_tap_ms == 300
+        assert cfg.transcription.model == "voxtral-mini-latest"
+        assert cfg.transcription.sample_rate == 16000
+        assert cfg.cleanup.enabled is True
+        assert cfg.cleanup.provider == "groq"
+        assert cfg.paste.delay_ms == 50
+        assert cfg.silence.timeout == 5.0
+        assert cfg.silence.threshold == 0.008
+
+
+class TestEnsureConfigDir:
+    """Config dir creation and bundled file copying."""
+
+    def test_creates_dir_and_copies_defaults(self, tmp_path):
+        config_dir = tmp_path / "yap"
+        config_file = config_dir / "config.toml"
+        vocab_file = config_dir / "vocabulary.txt"
+
+        with mock.patch("app.config._OLD_CONFIG_DIR", tmp_path / "nonexistent"), \
+             mock.patch("app.config.CONFIG_DIR", config_dir), \
+             mock.patch("app.config.CONFIG_FILE", config_file), \
+             mock.patch("app.config.VOCAB_FILE", vocab_file):
+            from app.config import _ensure_config_dir
+
+            _ensure_config_dir()
+
+        assert config_dir.exists()
+        assert config_file.exists()
+        assert vocab_file.exists()
+
+    def test_does_not_overwrite_existing_config(self, tmp_path):
+        config_dir = tmp_path / "yap"
+        config_dir.mkdir()
+        config_file = config_dir / "config.toml"
+        config_file.write_text("custom content")
+
+        with mock.patch("app.config._OLD_CONFIG_DIR", tmp_path / "nonexistent"), \
+             mock.patch("app.config.CONFIG_DIR", config_dir), \
+             mock.patch("app.config.CONFIG_FILE", config_file), \
+             mock.patch("app.config.VOCAB_FILE", config_dir / "vocabulary.txt"):
+            from app.config import _ensure_config_dir
+
+            _ensure_config_dir()
+
+        assert config_file.read_text() == "custom content"

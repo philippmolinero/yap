@@ -2,7 +2,6 @@
 
 import collections
 import logging
-import os
 import subprocess
 import threading
 
@@ -16,13 +15,14 @@ from app.overlay import OverlayState, RecordingOverlay
 from app.paster import paste
 from app.pipeline import Pipeline, PipelineState
 from app.recorder import Recorder
+from app.resources import get_resource_path
+from app.settings_dialog import SettingsDialog
 from app.sounds import SoundFeedback
 from app.transcriber import Transcriber
 
 logger = logging.getLogger(__name__)
 
-_ASSETS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets")
-_ICON_PATH = os.path.join(_ASSETS_DIR, "icon_menubar.png")
+_ICON_PATH = str(get_resource_path("assets", "icon_menubar.png"))
 
 
 class YapApp(rumps.App):
@@ -37,48 +37,17 @@ class YapApp(rumps.App):
         # Load config
         self.cfg = load_config()
 
-        # Validate API keys
-        if not self.cfg.mistral_api_key:
-            rumps.notification(
-                "Yap",
-                "Missing API Key",
-                "MISTRAL_API_KEY not set. Check your .env file.",
-            )
-
         # Sound feedback
         self.sounds = SoundFeedback()
 
         # Dictation history (most recent first)
         self._history: collections.deque[str] = collections.deque(maxlen=15)
 
-        # Build pipeline components
-        self.recorder = Recorder(
-            sample_rate=self.cfg.transcription.sample_rate,
-            silence_timeout=self.cfg.silence.timeout,
-            silence_threshold=self.cfg.silence.threshold,
-        )
-        self.recorder._on_silence = self._on_silence
-        recorder = self.recorder
-        transcriber = Transcriber(
-            api_key=self.cfg.mistral_api_key,
-            model=self.cfg.transcription.model,
-            vocabulary=self.cfg.vocabulary,
-        )
-        cleanup = create_cleanup(
-            provider=self.cfg.cleanup.provider,
-            api_key=self.cfg.groq_api_key,
-            model=self.cfg.cleanup.model,
-            enabled=self.cfg.cleanup.enabled,
-        )
+        # Settings dialog instance
+        self._settings_dialog = None
 
-        self.pipeline = Pipeline(
-            recorder=recorder,
-            transcriber=transcriber,
-            cleanup=cleanup,
-            paste_delay_ms=self.cfg.paste.delay_ms,
-            on_state_change=self._on_state_change,
-            on_complete=self._on_dictation_complete,
-        )
+        # Build pipeline components
+        self._build_pipeline()
 
         # Overlay — waveform pulls audio level directly from recorder
         self.overlay = RecordingOverlay()
@@ -104,11 +73,43 @@ class YapApp(rumps.App):
             None,
             self.recent_menu,
             None,
+            rumps.MenuItem("Settings...", callback=self._open_settings),
             rumps.MenuItem("Open Config", callback=self._open_config),
             rumps.MenuItem("Open Vocabulary", callback=self._open_vocabulary),
             None,
             rumps.MenuItem("Quit", callback=self._quit),
         ]
+
+    def _build_pipeline(self):
+        """Create recorder, transcriber, cleanup, and pipeline from current config."""
+        if hasattr(self, "recorder") and self.recorder is not None:
+            self.recorder.stop()
+        self.recorder = Recorder(
+            sample_rate=self.cfg.transcription.sample_rate,
+            silence_timeout=self.cfg.silence.timeout,
+            silence_threshold=self.cfg.silence.threshold,
+        )
+        self.recorder._on_silence = self._on_silence
+        transcriber = Transcriber(
+            api_key=self.cfg.mistral_api_key,
+            model=self.cfg.transcription.model,
+            vocabulary=self.cfg.vocabulary,
+        )
+        cleanup = create_cleanup(
+            provider=self.cfg.cleanup.provider,
+            api_key=self.cfg.groq_api_key,
+            model=self.cfg.cleanup.model,
+            enabled=self.cfg.cleanup.enabled,
+        )
+
+        self.pipeline = Pipeline(
+            recorder=self.recorder,
+            transcriber=transcriber,
+            cleanup=cleanup,
+            paste_delay_ms=self.cfg.paste.delay_ms,
+            on_state_change=self._on_state_change,
+            on_complete=self._on_dictation_complete,
+        )
 
     def _on_hotkey_start(self):
         self.pipeline.start_recording()
@@ -186,6 +187,21 @@ class YapApp(rumps.App):
             daemon=True,
         ).start()
 
+    def _open_settings(self, _):
+        """Open the settings dialog."""
+        self._settings_dialog = SettingsDialog(on_save=self._on_settings_saved)
+        self._settings_dialog.show()
+
+    def _on_settings_saved(self):
+        """Callback after settings are saved — reload config and rebuild pipeline."""
+        if self.pipeline.state != PipelineState.IDLE:
+            logger.warning("Cannot reload config while recording is active")
+            return
+        logger.info("Settings saved, reloading config")
+        self.cfg = load_config()
+        self._build_pipeline()
+        self.overlay.set_level_provider(lambda: self.recorder.audio_level)
+
     def _open_config(self, _):
         subprocess.Popen(["open", str(CONFIG_FILE)])
 
@@ -201,6 +217,15 @@ class YapApp(rumps.App):
         timer.stop()
         self.hotkey_mgr.start()
         logger.info("Hotkey manager started")
+
+        # Check for missing API keys after startup
+        if not self.cfg.mistral_api_key:
+            rumps.notification(
+                "Yap",
+                "Missing API Key",
+                "Mistral API key not set. Opening Settings...",
+            )
+            self._open_settings(None)
 
 
 

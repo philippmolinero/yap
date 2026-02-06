@@ -3,7 +3,9 @@ soundfile
 numpy
 mistralai
 groq
+httpx
 rumps
 python-dotenv
 pyobjc-framework-Quartz
 pyobjc-framework-Cocoa
+pyinstaller

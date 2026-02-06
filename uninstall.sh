@@ -15,5 +15,5 @@ fi
 
 echo ""
 echo "Done. The app will no longer auto-start."
-echo "Your config remains at ~/.config/voxtral-dictation/"
-echo "To fully remove, delete the voxtral-dictation directory."
+echo "Your config remains at ~/.config/yap/"
+echo "To fully remove, delete the yap config directory."

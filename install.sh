@@ -3,7 +3,8 @@ set -e
 
 APP_DIR="$(cd "$(dirname "$0")" && pwd)"
 VENV_DIR="$APP_DIR/.venv"
-CONFIG_DIR="$HOME/.config/voxtral-dictation"
+CONFIG_DIR="$HOME/.config/yap"
+OLD_CONFIG_DIR="$HOME/.config/voxtral-dictation"
 PLIST_NAME="com.yap-dictation"
 PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_NAME}.plist"
 
@@ -23,7 +24,13 @@ echo "Installing dependencies..."
 "$VENV_DIR/bin/pip" install -q --upgrade pip
 "$VENV_DIR/bin/pip" install -q -r "$APP_DIR/requirements.txt"
 
-# 3. Set up config directory
+# 3. Migrate old config directory if needed
+if [ -d "$OLD_CONFIG_DIR" ] && [ ! -d "$CONFIG_DIR" ]; then
+    echo "Migrating config from $OLD_CONFIG_DIR to $CONFIG_DIR..."
+    mv "$OLD_CONFIG_DIR" "$CONFIG_DIR"
+fi
+
+# 4. Set up config directory
 mkdir -p "$CONFIG_DIR"
 
 if [ ! -f "$CONFIG_DIR/config.toml" ]; then
@@ -40,7 +47,7 @@ else
     echo "Vocabulary already exists at $CONFIG_DIR/vocabulary.txt"
 fi
 
-# 4. Check .env
+# 5. Check .env
 if [ ! -f "$APP_DIR/.env" ]; then
     cp "$APP_DIR/.env.example" "$APP_DIR/.env"
     echo ""
@@ -49,7 +56,7 @@ if [ ! -f "$APP_DIR/.env" ]; then
     echo ""
 fi
 
-# 5. Create launchd plist
+# 6. Create launchd plist
 cat > "$PLIST_PATH" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
