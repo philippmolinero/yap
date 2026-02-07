@@ -67,6 +67,32 @@ class GroqCleanup(CleanupProvider):
         )
 
 
+class MistralCleanup(CleanupProvider):
+    """Cleanup via Mistral (mistral-small-latest)."""
+
+    def __init__(self, api_key: str, model: str = "mistral-small-latest"):
+        from mistralai import Mistral
+        self.client = Mistral(api_key=api_key)
+        self.model = model
+
+    def clean(self, text: str, language: str = "") -> CleanupResult:
+        t0 = time.perf_counter()
+        resp = self.client.chat.complete(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": CLEANUP_PROMPT},
+                {"role": "user", "content": text},
+            ],
+            temperature=0.1,
+            max_tokens=2048,
+        )
+        latency = time.perf_counter() - t0
+        return CleanupResult(
+            text=resp.choices[0].message.content.strip(),
+            latency=latency,
+        )
+
+
 class NoopCleanup(CleanupProvider):
     """Passthrough — returns raw text unchanged."""
 
@@ -81,6 +107,9 @@ def create_cleanup(provider: str, api_key: str = "", model: str = "", enabled: b
 
     if provider == "groq" and api_key:
         return GroqCleanup(api_key=api_key, model=model or "llama-3.3-70b-versatile")
+
+    if provider == "mistral" and api_key:
+        return MistralCleanup(api_key=api_key, model=model or "mistral-small-latest")
 
     logger.warning("Cleanup provider '%s' unavailable, falling back to noop", provider)
     return NoopCleanup()

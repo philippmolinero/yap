@@ -93,16 +93,19 @@ def _load_vocabulary() -> list[str]:
     return [line.strip() for line in lines if line.strip()]
 
 
-def _load_secrets() -> dict[str, str]:
-    """Load API keys from secrets.toml."""
+def _load_secrets() -> tuple[dict[str, str], dict[str, str]]:
+    """Load API keys and preferences from secrets.toml.
+
+    Returns (api_keys, preferences) dicts.
+    """
     if not SECRETS_FILE.exists():
-        return {}
+        return {}, {}
     try:
         raw = tomllib.loads(SECRETS_FILE.read_text())
-        return raw.get("api_keys", {})
+        return raw.get("api_keys", {}), raw.get("preferences", {})
     except Exception:
         logger.warning("Failed to parse secrets.toml, ignoring")
-        return {}
+        return {}, {}
 
 
 def _escape_toml_string(s: str) -> str:
@@ -110,12 +113,15 @@ def _escape_toml_string(s: str) -> str:
     return s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
 
-def save_secrets(*, mistral_api_key: str = "", groq_api_key: str = ""):
-    """Save API keys to secrets.toml."""
+def save_secrets(*, mistral_api_key: str = "", groq_api_key: str = "", cleanup_provider: str = ""):
+    """Save API keys and preferences to secrets.toml."""
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     content = "[api_keys]\n"
     content += f'mistral = "{_escape_toml_string(mistral_api_key)}"\n'
     content += f'groq = "{_escape_toml_string(groq_api_key)}"\n'
+    if cleanup_provider:
+        content += "\n[preferences]\n"
+        content += f'cleanup_provider = "{_escape_toml_string(cleanup_provider)}"\n'
     SECRETS_FILE.write_text(content)
     SECRETS_FILE.chmod(0o600)
 
@@ -137,14 +143,32 @@ def load_config() -> AppConfig:
     silence_raw = raw.get("silence", {})
 
     # API keys: secrets.toml > env vars
-    secrets = _load_secrets()
+    secrets, preferences = _load_secrets()
     mistral_key = secrets.get("mistral", "") or os.environ.get("MISTRAL_API_KEY", "")
     groq_key = secrets.get("groq", "") or os.environ.get("GROQ_API_KEY", "")
+
+    cleanup_cfg = CleanupConfig(**cleanup_raw)
+
+    # Apply explicit preference from secrets.toml
+    pref_provider = preferences.get("cleanup_provider", "")
+    if pref_provider == "disabled":
+        cleanup_cfg.enabled = False
+    elif pref_provider in ("groq", "mistral"):
+        cleanup_cfg.provider = pref_provider
+        if pref_provider == "mistral":
+            cleanup_cfg.model = "mistral-small-latest"
+        elif pref_provider == "groq":
+            cleanup_cfg.model = "llama-3.3-70b-versatile"
+    elif not pref_provider:
+        # Smart default: no explicit preference, no Groq key, but Mistral key → use Mistral
+        if not groq_key and mistral_key:
+            cleanup_cfg.provider = "mistral"
+            cleanup_cfg.model = "mistral-small-latest"
 
     return AppConfig(
         hotkey=HotkeyConfig(**hotkey_raw),
         transcription=TranscriptionConfig(**trans_raw),
-        cleanup=CleanupConfig(**cleanup_raw),
+        cleanup=cleanup_cfg,
         paste=PasteConfig(**paste_raw),
         silence=SilenceConfig(**silence_raw),
         vocabulary=_load_vocabulary(),

@@ -82,9 +82,10 @@ class TestSecrets:
         with mock.patch("app.config.SECRETS_FILE", secrets_file):
             from app.config import _load_secrets
 
-            result = _load_secrets()
+            keys, prefs = _load_secrets()
 
-        assert result == {}
+        assert keys == {}
+        assert prefs == {}
 
     def test_load_secrets_from_file(self, tmp_path):
         secrets_file = tmp_path / "secrets.toml"
@@ -97,10 +98,10 @@ class TestSecrets:
         with mock.patch("app.config.SECRETS_FILE", secrets_file):
             from app.config import _load_secrets
 
-            result = _load_secrets()
+            keys, prefs = _load_secrets()
 
-        assert result["mistral"] == "sk-test-mistral"
-        assert result["groq"] == "gsk-test-groq"
+        assert keys["mistral"] == "sk-test-mistral"
+        assert keys["groq"] == "gsk-test-groq"
 
     def test_load_secrets_handles_invalid_toml(self, tmp_path):
         secrets_file = tmp_path / "secrets.toml"
@@ -109,9 +110,10 @@ class TestSecrets:
         with mock.patch("app.config.SECRETS_FILE", secrets_file):
             from app.config import _load_secrets
 
-            result = _load_secrets()
+            keys, prefs = _load_secrets()
 
-        assert result == {}
+        assert keys == {}
+        assert prefs == {}
 
     def test_save_secrets(self, tmp_path):
         secrets_file = tmp_path / "secrets.toml"
@@ -154,10 +156,10 @@ class TestSecrets:
             from app.config import save_secrets, _load_secrets
 
             save_secrets(mistral_api_key='key-with"quote', groq_api_key="key-with\\slash")
-            result = _load_secrets()
+            keys, prefs = _load_secrets()
 
-        assert result["mistral"] == 'key-with"quote'
-        assert result["groq"] == "key-with\\slash"
+        assert keys["mistral"] == 'key-with"quote'
+        assert keys["groq"] == "key-with\\slash"
 
     def test_save_then_load_roundtrip(self, tmp_path):
         secrets_file = tmp_path / "secrets.toml"
@@ -169,10 +171,10 @@ class TestSecrets:
             from app.config import save_secrets, _load_secrets
 
             save_secrets(mistral_api_key="sk-roundtrip", groq_api_key="gsk-roundtrip")
-            result = _load_secrets()
+            keys, prefs = _load_secrets()
 
-        assert result["mistral"] == "sk-roundtrip"
-        assert result["groq"] == "gsk-roundtrip"
+        assert keys["mistral"] == "sk-roundtrip"
+        assert keys["groq"] == "gsk-roundtrip"
 
 
 class TestLoadConfig:

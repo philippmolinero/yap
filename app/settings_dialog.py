@@ -11,7 +11,7 @@ from app.config import SECRETS_FILE, load_config, save_secrets
 logger = logging.getLogger(__name__)
 
 _WINDOW_WIDTH = 420
-_WINDOW_HEIGHT = 200
+_WINDOW_HEIGHT = 240
 _FIELD_HEIGHT = 24
 _LABEL_WIDTH = 120
 _PADDING = 20
@@ -52,6 +52,7 @@ class SettingsDialog:
         self._window = None
         self._mistral_field = None
         self._groq_field = None
+        self._cleanup_popup = None
         self._controller = None
 
     def show(self):
@@ -127,6 +128,26 @@ class SettingsDialog:
         self._groq_field.setPlaceholderString_("gsk_...")
         content.addSubview_(self._groq_field)
 
+        # --- Cleanup Provider ---
+        y_pos -= _FIELD_HEIGHT + 16
+
+        cleanup_label = AppKit.NSTextField.labelWithString_("Cleanup:")
+        cleanup_label.setFrame_(AppKit.NSMakeRect(_PADDING, y_pos, _LABEL_WIDTH, _FIELD_HEIGHT))
+        cleanup_label.setAlignment_(AppKit.NSTextAlignmentRight)
+        content.addSubview_(cleanup_label)
+
+        self._cleanup_popup = AppKit.NSPopUpButton.alloc().initWithFrame_pullsDown_(
+            AppKit.NSMakeRect(
+                _PADDING + _LABEL_WIDTH + 8,
+                y_pos,
+                180,
+                _FIELD_HEIGHT,
+            ),
+            False,
+        )
+        self._cleanup_popup.addItemsWithTitles_(["Groq (Fast)", "Mistral", "Disabled"])
+        content.addSubview_(self._cleanup_popup)
+
         # --- Buttons ---
         y_pos -= _BUTTON_HEIGHT + 24
 
@@ -159,12 +180,20 @@ class SettingsDialog:
         save_btn.setAction_("saveClicked:")
         content.addSubview_(save_btn)
 
-        # Load existing keys (secrets.toml > env vars)
+        # Load existing config (secrets.toml > env vars)
         cfg = load_config()
         if cfg.mistral_api_key:
             self._mistral_field.setStringValue_(cfg.mistral_api_key)
         if cfg.groq_api_key:
             self._groq_field.setStringValue_(cfg.groq_api_key)
+
+        # Pre-select cleanup dropdown
+        if not cfg.cleanup.enabled:
+            self._cleanup_popup.selectItemWithTitle_("Disabled")
+        elif cfg.cleanup.provider == "mistral":
+            self._cleanup_popup.selectItemWithTitle_("Mistral")
+        else:
+            self._cleanup_popup.selectItemWithTitle_("Groq (Fast)")
 
         self._window.makeKeyAndOrderFront_(None)
         AppKit.NSApp.activateIgnoringOtherApps_(True)
@@ -179,7 +208,13 @@ class SettingsDialog:
         try:
             mistral_key = str(self._mistral_field.stringValue())
             groq_key = str(self._groq_field.stringValue())
-            save_secrets(mistral_api_key=mistral_key, groq_api_key=groq_key)
+
+            # Map dropdown selection to provider string
+            selection = str(self._cleanup_popup.titleOfSelectedItem())
+            provider_map = {"Groq (Fast)": "groq", "Mistral": "mistral", "Disabled": "disabled"}
+            cleanup_provider = provider_map.get(selection, "groq")
+
+            save_secrets(mistral_api_key=mistral_key, groq_api_key=groq_key, cleanup_provider=cleanup_provider)
             logger.info("API keys saved to %s", SECRETS_FILE)
 
             # Brief visual confirmation before closing

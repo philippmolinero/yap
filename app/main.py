@@ -97,9 +97,12 @@ class YapApp(rumps.App):
             model=self.cfg.transcription.model,
             vocabulary=self.cfg.vocabulary,
         )
+        cleanup_key = {"groq": self.cfg.groq_api_key, "mistral": self.cfg.mistral_api_key}.get(
+            self.cfg.cleanup.provider, ""
+        )
         cleanup = create_cleanup(
             provider=self.cfg.cleanup.provider,
-            api_key=self.cfg.groq_api_key,
+            api_key=cleanup_key,
             model=self.cfg.cleanup.model,
             enabled=self.cfg.cleanup.enabled,
         )
