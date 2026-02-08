@@ -3,22 +3,21 @@
 import subprocess
 import time
 
+import AppKit
+
 
 def paste(text: str, delay_ms: int = 50):
-    """Set clipboard via pbcopy and trigger Cmd+V via AppleScript.
+    """Set clipboard via NSPasteboard and trigger Cmd+V via AppleScript.
 
-    Raises subprocess.CalledProcessError if pbcopy fails.
     The Cmd+V keystroke may fail without Accessibility permission — in that
     case a warning is logged but we don't raise (the text is still on the clipboard).
     """
     import logging
 
-    # Set clipboard
-    subprocess.run(
-        ["pbcopy"],
-        input=text.encode("utf-8"),
-        check=True,
-    )
+    # Set clipboard via NSPasteboard (avoids encoding issues with pbcopy)
+    pb = AppKit.NSPasteboard.generalPasteboard()
+    pb.clearContents()
+    pb.setString_forType_(text, AppKit.NSPasteboardTypeString)
 
     # Brief delay to ensure clipboard is ready
     time.sleep(delay_ms / 1000.0)
