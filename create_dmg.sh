@@ -4,7 +4,7 @@ set -e
 cd "$(dirname "$0")"
 
 APP_PATH="dist/Yap.app"
-DMG_NAME="Yap-1.0.0.dmg"
+DMG_NAME="Yap-0.2.0.dmg"
 DMG_PATH="dist/$DMG_NAME"
 VOLUME_NAME="Yap"
 TMP_DIR="dist/dmg_staging"

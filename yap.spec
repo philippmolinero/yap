@@ -67,8 +67,8 @@ app = BUNDLE(
     info_plist={
         "CFBundleName": "Yap",
         "CFBundleDisplayName": "Yap",
-        "CFBundleVersion": "1.0.0",
-        "CFBundleShortVersionString": "1.0.0",
+        "CFBundleVersion": "0.2.0",
+        "CFBundleShortVersionString": "0.2.0",
         "LSUIElement": True,
         "NSMicrophoneUsageDescription": "Yap needs microphone access for voice dictation.",
     },
