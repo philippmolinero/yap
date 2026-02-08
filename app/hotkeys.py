@@ -50,6 +50,7 @@ class HotkeyManager:
         self._option_held = False
         self._thread: threading.Thread | None = None
         self._tap = None
+        self._cf_run_loop = None  # CFRunLoop reference for clean shutdown
 
     def _callback(self, proxy, event_type, event, refcon):
         """CGEventTap callback — runs on the CFRunLoop thread."""
@@ -156,8 +157,9 @@ class HotkeyManager:
             return
 
         run_loop_source = Quartz.CFMachPortCreateRunLoopSource(None, self._tap, 0)
+        self._cf_run_loop = Quartz.CFRunLoopGetCurrent()
         Quartz.CFRunLoopAddSource(
-            Quartz.CFRunLoopGetCurrent(),
+            self._cf_run_loop,
             run_loop_source,
             Quartz.kCFRunLoopDefaultMode,
         )
@@ -165,6 +167,7 @@ class HotkeyManager:
 
         logger.info("Hotkey manager started (keycode %d)", self.keycode)
         Quartz.CFRunLoopRun()
+        logger.info("Hotkey manager CFRunLoop exited")
 
     def start(self):
         """Start monitoring in a daemon thread."""
@@ -207,10 +210,27 @@ class HotkeyManager:
         AppKit.NSOperationQueue.mainQueue().addOperationWithBlock_(show)
 
     def stop(self):
-        """Stop the event tap and run loop."""
+        """Stop the event tap, CFRunLoop, and thread cleanly."""
+        logger.info("Hotkey manager stopping")
         if self._tap is not None:
             Quartz.CGEventTapEnable(self._tap, False)
             self._tap = None
+        if self._cf_run_loop is not None:
+            Quartz.CFRunLoopStop(self._cf_run_loop)
+            self._cf_run_loop = None
+        if self._thread is not None:
+            self._thread.join(timeout=3.0)
+            if self._thread.is_alive():
+                logger.warning("Hotkey thread did not exit within timeout")
+            self._thread = None
+        self.reset()
+        logger.info("Hotkey manager stopped")
+
+    def restart(self):
+        """Stop and restart the event tap (e.g. after sleep/wake)."""
+        logger.info("Hotkey manager restarting")
+        self.stop()
+        self.start()
 
 
 if __name__ == "__main__":

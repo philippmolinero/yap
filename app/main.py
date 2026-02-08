@@ -8,6 +8,7 @@ import sys
 import threading
 
 import AppKit
+import objc
 import rumps
 
 from app.cleanup import create_cleanup
@@ -25,6 +26,71 @@ from app.transcriber import Transcriber
 logger = logging.getLogger(__name__)
 
 _ICON_PATH = str(get_resource_path("assets", "icon_menubar.png"))
+
+
+class _SleepWakeObserver(AppKit.NSObject):
+    """NSObject subclass that receives NSWorkspace sleep/wake notifications."""
+
+    def initWithApp_(self, app):
+        self = objc.super(_SleepWakeObserver, self).init()
+        if self is None:
+            return None
+        self._app = app
+        return self
+
+    def register(self):
+        """Subscribe to sleep/wake notifications from NSWorkspace."""
+        nc = AppKit.NSWorkspace.sharedWorkspace().notificationCenter()
+        nc.addObserver_selector_name_object_(
+            self,
+            objc.selector(self.handleWillSleep_, signature=b"v@:@"),
+            AppKit.NSWorkspaceWillSleepNotification,
+            None,
+        )
+        nc.addObserver_selector_name_object_(
+            self,
+            objc.selector(self.handleDidWake_, signature=b"v@:@"),
+            AppKit.NSWorkspaceDidWakeNotification,
+            None,
+        )
+        logger.info("Sleep/wake observer registered")
+
+    def unregister(self):
+        """Remove notification observers."""
+        nc = AppKit.NSWorkspace.sharedWorkspace().notificationCenter()
+        nc.removeObserver_(self)
+        logger.info("Sleep/wake observer unregistered")
+
+    def handleWillSleep_(self, notification):
+        try:
+            logger.info("System going to sleep — stopping recording and event tap")
+            app = self._app
+            # Stop any active recording
+            if app.pipeline.state != PipelineState.IDLE:
+                logger.info("Active recording detected, stopping pipeline")
+                app.pipeline.stop_recording_and_process()
+            # Tear down the event tap
+            app.hotkey_mgr.stop()
+        except Exception:
+            logger.exception("Error in sleep handler")
+
+    def handleDidWake_(self, notification):
+        try:
+            logger.info("System woke from sleep — restarting event tap after delay")
+
+            def _restart():
+                try:
+                    import time
+                    time.sleep(1.0)
+                    app = self._app
+                    app.hotkey_mgr.start()
+                    logger.info("Event tap restarted after wake")
+                except Exception:
+                    logger.exception("Error restarting event tap after wake")
+
+            threading.Thread(target=_restart, daemon=True).start()
+        except Exception:
+            logger.exception("Error in wake handler")
 
 
 class YapApp(rumps.App):
@@ -62,6 +128,10 @@ class YapApp(rumps.App):
             keycode=self.cfg.hotkey.keycode,
             double_tap_ms=self.cfg.hotkey.double_tap_ms,
         )
+
+        # Sleep/wake observer — must be retained to prevent GC
+        self._sleep_wake_observer = _SleepWakeObserver.alloc().initWithApp_(self)
+        self._sleep_wake_observer.register()
 
         # Build menu
         self.status_item = rumps.MenuItem("Status: Idle", callback=None)
@@ -149,12 +219,23 @@ class YapApp(rumps.App):
 
     def _on_stop_clicked(self, _):
         """Menu bar stop button — emergency escape hatch."""
-        logger.info("Manual stop from menu bar")
+        logger.info(
+            "Emergency stop from menu bar (pipeline=%s, recorder_active=%s)",
+            self.pipeline.state.value,
+            self.recorder.is_recording,
+        )
+        # Reset hotkey state so hold-to-talk doesn't re-trigger
         self.hotkey_mgr.reset()
-        threading.Thread(
-            target=self.pipeline.stop_recording_and_process,
-            daemon=True,
-        ).start()
+
+        # Force stop the recorder directly in case pipeline is wedged
+        if self.recorder.is_recording:
+            logger.info("Force-stopping recorder")
+            self.recorder.stop()
+
+        # If pipeline is stuck in a non-idle state, force it back
+        if self.pipeline.state != PipelineState.IDLE:
+            logger.info("Forcing pipeline state to IDLE")
+            self.pipeline._set_state(PipelineState.IDLE)
 
     def _on_silence(self):
         """Called from recorder when silence exceeds timeout — auto-stop."""
@@ -214,6 +295,7 @@ class YapApp(rumps.App):
         subprocess.Popen(["open", str(VOCAB_FILE)])
 
     def _quit(self, _):
+        self._sleep_wake_observer.unregister()
         self.hotkey_mgr.stop()
         rumps.quit_application()
 

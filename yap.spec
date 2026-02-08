@@ -10,6 +10,7 @@ a = Analysis(
         ("config/vocabulary.txt", "config"),
         ("assets/icon_menubar.png", "assets"),
         ("assets/icon_app.png", "assets"),
+        ("assets/ui_click.wav", "assets"),
     ],
     hiddenimports=[
         "rumps",
