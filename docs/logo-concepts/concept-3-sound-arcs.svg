@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <style>
+      .arc { fill: none; stroke: #C27B5A; stroke-linecap: round; }
+    </style>
+  </defs>
+  <!-- Background -->
+  <rect width="512" height="512" rx="112" fill="#2D2926"/>
+  <!-- Source point: solid circle, positioned left-of-center -->
+  <circle cx="168" cy="256" r="32" fill="#C27B5A"/>
+  <!-- Arc 1: inner, short sweep -->
+  <path class="arc" stroke-width="36" d="M 240 196 A 84 84 0 0 1 240 316"/>
+  <!-- Arc 2: middle -->
+  <path class="arc" stroke-width="32" d="M 296 160 A 136 136 0 0 1 296 352"/>
+  <!-- Arc 3: outer, wide sweep -->
+  <path class="arc" stroke-width="28" d="M 352 128 A 184 184 0 0 1 352 384"/>
+</svg>

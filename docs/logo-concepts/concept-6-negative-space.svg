@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <clipPath id="icon-clip3">
+      <rect width="512" height="512" rx="112"/>
+    </clipPath>
+    <mask id="neg-mask">
+      <rect width="512" height="512" fill="white"/>
+      <!-- Cut out: a speech bubble shape in negative space, revealing the dark background -->
+      <!-- The bubble itself is the absence -->
+      <rect x="140" y="120" width="232" height="188" rx="44" fill="black"/>
+      <!-- Bubble tail -->
+      <path fill="black" d="M 204 296 Q 188 336, 168 360 Q 200 340, 224 308 Z"/>
+    </mask>
+  </defs>
+  <g clip-path="url(#icon-clip3)">
+    <!-- Background -->
+    <rect width="512" height="512" fill="#2D2926"/>
+    <!-- Full clay fill with bubble cut out -->
+    <rect width="512" height="512" fill="#C27B5A" mask="url(#neg-mask)"/>
+    <!-- Inside the cut-out bubble: subtle waveform dots suggesting voice -->
+    <circle cx="216" cy="214" r="8" fill="#4A4340"/>
+    <circle cx="256" cy="214" r="12" fill="#4A4340"/>
+    <circle cx="296" cy="214" r="8" fill="#4A4340"/>
+  </g>
+</svg>

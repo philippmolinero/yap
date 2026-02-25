@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <style>
+      .mark { fill: #C27B5A; }
+    </style>
+  </defs>
+  <!-- Background -->
+  <rect width="512" height="512" rx="112" fill="#2D2926"/>
+  <!-- Stylized Y using clean geometric strokes -->
+  <!-- Left arm: diagonal from upper-left to center -->
+  <rect class="mark" x="0" y="0" width="44" height="190" rx="22"
+        transform="translate(152, 108) rotate(30, 22, 0)"/>
+  <!-- Right arm: diagonal from upper-right to center -->
+  <rect class="mark" x="0" y="0" width="44" height="190" rx="22"
+        transform="translate(288, 108) rotate(-30, 22, 0)"/>
+  <!-- Stem: vertical from center down -->
+  <rect class="mark" x="234" y="248" width="44" height="168" rx="22"/>
+  <!-- Junction: circle to cleanly connect the three strokes -->
+  <circle class="mark" cx="256" cy="272" r="40"/>
+</svg>

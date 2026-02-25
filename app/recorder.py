@@ -17,6 +17,7 @@ class Recorder:
         self._frames: list[np.ndarray] = []
         self._stream: sd.InputStream | None = None
         self._lock = threading.Lock()
+        self._stop_lock = threading.Lock()  # prevents concurrent stop() calls
         self._level: float = 0.0  # current RMS audio level (0.0 - 1.0)
         # Silence detection
         self._silence_timeout = silence_timeout  # 0 = disabled
@@ -55,8 +56,24 @@ class Recorder:
 
     def start(self):
         """Start recording from the default microphone."""
+        # Be defensive: if an old stream is still around, close it first.
+        old_stream = None
+        with self._stop_lock:
+            if self._stream is not None:
+                old_stream, self._stream = self._stream, None
+        if old_stream is not None:
+            try:
+                old_stream.stop()
+            except Exception:
+                pass
+            try:
+                old_stream.close()
+            except Exception:
+                pass
+
         with self._lock:
             self._frames.clear()
+        self._level = 0.0
         self._silence_start = None
         self._silence_fired = False
 
@@ -69,11 +86,20 @@ class Recorder:
         self._stream.start()
 
     def stop(self) -> bytes:
-        """Stop recording and return WAV bytes (PCM16)."""
-        if self._stream is not None:
-            self._stream.stop()
-            self._stream.close()
-            self._stream = None
+        """Stop recording and return WAV bytes (PCM16).
+
+        Thread-safe: if two threads call stop() concurrently, only the first
+        one actually stops the PortAudio stream. The second gets empty bytes.
+        """
+        with self._stop_lock:
+            stream, self._stream = self._stream, None
+
+        if stream is not None:
+            stream.stop()
+            stream.close()
+        self._level = 0.0
+        self._silence_start = None
+        self._silence_fired = False
 
         with self._lock:
             if not self._frames:

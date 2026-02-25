@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <clipPath id="icon-clip2">
+      <rect width="512" height="512" rx="112"/>
+    </clipPath>
+  </defs>
+  <g clip-path="url(#icon-clip2)">
+    <!-- Background -->
+    <rect width="512" height="512" fill="#2D2926"/>
+    <!-- Y as tuning fork: the arms vibrate with subtle wave curves -->
+    <!-- Left arm: sinuous curve sweeping up-left -->
+    <path fill="#C27B5A" d="
+      M 234 268
+      C 218 232, 196 200, 168 164
+      C 156 148, 140 128, 124 116
+      C 112 108, 108 116, 112 128
+      C 116 140, 132 160, 148 184
+      C 176 224, 200 248, 214 268
+      Z
+    "/>
+    <!-- Right arm: sinuous curve sweeping up-right -->
+    <path fill="#C27B5A" d="
+      M 278 268
+      C 294 232, 316 200, 344 164
+      C 356 148, 372 128, 388 116
+      C 400 108, 404 116, 400 128
+      C 396 140, 380 160, 364 184
+      C 336 224, 312 248, 298 268
+      Z
+    "/>
+    <!-- Stem: tapered, slightly wider at junction -->
+    <path fill="#C27B5A" d="
+      M 238 264
+      C 236 296, 236 340, 240 388
+      C 242 404, 248 416, 256 416
+      C 264 416, 270 404, 272 388
+      C 276 340, 276 296, 274 264
+      Z
+    "/>
+    <!-- Junction: smooth organic merge point -->
+    <ellipse cx="256" cy="268" rx="36" ry="28" fill="#C27B5A"/>
+    <!-- Vibration lines on left arm: thin arcs suggesting resonance -->
+    <path fill="none" stroke="#7D8B6A" stroke-width="3" stroke-linecap="round" opacity="0.7"
+      d="M 108 148 C 100 164, 100 184, 112 196"/>
+    <path fill="none" stroke="#7D8B6A" stroke-width="2.5" stroke-linecap="round" opacity="0.5"
+      d="M 92 140 C 80 164, 80 192, 96 208"/>
+    <!-- Vibration lines on right arm -->
+    <path fill="none" stroke="#7D8B6A" stroke-width="3" stroke-linecap="round" opacity="0.7"
+      d="M 404 148 C 412 164, 412 184, 400 196"/>
+    <path fill="none" stroke="#7D8B6A" stroke-width="2.5" stroke-linecap="round" opacity="0.5"
+      d="M 420 140 C 432 164, 432 192, 416 208"/>
+  </g>
+</svg>

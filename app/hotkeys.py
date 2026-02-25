@@ -19,6 +19,8 @@ logger = logging.getLogger(__name__)
 
 # Right Option keycode
 RIGHT_OPTION_KEYCODE = 61
+_RELEASE_WATCHDOG_INTERVAL_S = 0.2
+_RELEASE_MISS_TICKS_REQUIRED = 2
 
 # CGEvent types
 _KEY_DOWN = Quartz.kCGEventKeyDown
@@ -51,13 +53,124 @@ class HotkeyManager:
         self._thread: threading.Thread | None = None
         self._tap = None
         self._cf_run_loop = None  # CFRunLoop reference for clean shutdown
+        self._release_watchdog: threading.Timer | None = None
+        self._forced_release_count = 0
+        self._release_miss_ticks = 0
+
+    @property
+    def forced_release_count(self) -> int:
+        return self._forced_release_count
+
+    def _cancel_release_watchdog(self):
+        timer = self._release_watchdog
+        self._release_watchdog = None
+        if timer is not None:
+            timer.cancel()
+
+    def _schedule_release_watchdog(self):
+        self._cancel_release_watchdog()
+        timer = threading.Timer(
+            _RELEASE_WATCHDOG_INTERVAL_S,
+            self._release_watchdog_tick,
+        )
+        timer.daemon = True
+        self._release_watchdog = timer
+        timer.start()
+
+    def _release_watchdog_tick(self):
+        self._release_watchdog = None
+        if not self._option_held:
+            return
+
+        if self._is_key_physically_down():
+            self._release_miss_ticks = 0
+            self._schedule_release_watchdog()
+            return
+
+        self._release_miss_ticks += 1
+        if self._release_miss_ticks < _RELEASE_MISS_TICKS_REQUIRED:
+            self._schedule_release_watchdog()
+            return
+
+        if not self._is_key_physically_down():
+            self._record_forced_release("watchdog")
+            self._release_if_needed()
+            return
+
+    def _is_key_physically_down(self) -> bool:
+        key_down = False
+        flags_down = False
+        key_check_ok = False
+        flags_check_ok = False
+
+        try:
+            key_down = bool(
+                Quartz.CGEventSourceKeyState(
+                    Quartz.kCGEventSourceStateCombinedSessionState,
+                    self.keycode,
+                )
+            )
+            key_check_ok = True
+        except Exception:
+            logger.exception("Release watchdog key state check failed")
+
+        try:
+            flags = Quartz.CGEventSourceFlagsState(
+                Quartz.kCGEventSourceStateCombinedSessionState
+            )
+            flags_down = bool(flags & _RIGHT_OPTION_FLAG)
+            flags_check_ok = True
+        except Exception:
+            logger.exception("Release watchdog flags check failed")
+
+        # Modifier key reporting can differ by macOS version/hardware. Treat
+        # either signal as "still down" to avoid false forced releases.
+        if key_down or flags_down:
+            return True
+        # If both checks failed due exceptions, fail open (assume down).
+        if not key_check_ok and not flags_check_ok:
+            return True
+        return False
+
+    def _release_if_needed(self):
+        if not self._option_held:
+            return
+        self._option_held = False
+        self._release_miss_ticks = 0
+        self._cancel_release_watchdog()
+        self._handle_up()
+
+    def _record_forced_release(self, reason: str):
+        self._forced_release_count += 1
+        logger.warning(
+            "Forced hotkey release (%s) [count=%d]",
+            reason,
+            self._forced_release_count,
+        )
 
     def _callback(self, proxy, event_type, event, refcon):
         """CGEventTap callback — runs on the CFRunLoop thread."""
         # macOS disables event taps that are slow to respond — re-enable
         if event_type == Quartz.kCGEventTapDisabledByTimeout:
             logger.warning("Event tap disabled by timeout — re-enabling")
-            Quartz.CGEventTapEnable(self._tap, True)
+            if self._option_held and not self._is_key_physically_down():
+                self._record_forced_release("event_tap_timeout")
+                self._release_if_needed()
+            if self._tap is not None:
+                Quartz.CGEventTapEnable(self._tap, True)
+            return event
+
+        if event_type in (_KEY_DOWN, _KEY_UP):
+            keycode = Quartz.CGEventGetIntegerValueField(
+                event, Quartz.kCGKeyboardEventKeycode
+            )
+            if keycode != self.keycode:
+                return event
+            if event_type == _KEY_DOWN and not self._option_held:
+                self._option_held = True
+                self._handle_down()
+            elif event_type == _KEY_UP and self._option_held:
+                self._release_if_needed()
             return event
 
         # We monitor flagsChanged for modifier keys like Option
@@ -78,42 +191,44 @@ class HotkeyManager:
                 self._handle_down()
             elif not option_down and self._option_held:
                 # Key released
-                self._option_held = False
-                self._handle_up()
+                self._release_if_needed()
 
         return event
 
     def _handle_down(self):
         now = time.time()
         elapsed_ms = (now - self._last_down_time) * 1000
+        self._release_miss_ticks = 0
 
         if self._active and self._toggle_mode:
             # In toggle mode — a new tap stops recording
             self._toggle_mode = False
             self._active = False
             logger.info("Toggle mode off — stopping")
-            self.on_stop()
+            threading.Thread(target=self.on_stop, daemon=True).start()
         elif not self._active and elapsed_ms < self.double_tap_ms:
             # Double-tap detected — enter toggle mode
             self._toggle_mode = True
             self._active = True
             logger.info("Double-tap — toggle mode on")
-            self.on_start()
+            threading.Thread(target=self.on_start, daemon=True).start()
         elif not self._active:
             # Single press — hold-to-talk
             self._active = True
             self._toggle_mode = False
             logger.info("Hold-to-talk — recording")
-            self.on_start()
+            threading.Thread(target=self.on_start, daemon=True).start()
 
+        self._schedule_release_watchdog()
         self._last_down_time = now
 
     def _handle_up(self):
+        self._cancel_release_watchdog()
         if self._active and not self._toggle_mode:
             # Release in hold-to-talk mode — stop
             self._active = False
             logger.info("Released — stopping")
-            self.on_stop()
+            threading.Thread(target=self.on_stop, daemon=True).start()
         # In toggle mode, release is ignored
 
     def _wait_for_input_monitoring(self) -> bool:
@@ -140,7 +255,11 @@ class HotkeyManager:
         if not self._wait_for_input_monitoring():
             return
 
-        mask = Quartz.CGEventMaskBit(_FLAGS_CHANGED)
+        mask = (
+            Quartz.CGEventMaskBit(_FLAGS_CHANGED)
+            | Quartz.CGEventMaskBit(_KEY_DOWN)
+            | Quartz.CGEventMaskBit(_KEY_UP)
+        )
 
         self._tap = Quartz.CGEventTapCreate(
             Quartz.kCGSessionEventTap,
@@ -176,6 +295,8 @@ class HotkeyManager:
 
     def reset(self):
         """Reset internal state (e.g. after an external stop like silence detection)."""
+        self._cancel_release_watchdog()
+        self._release_miss_ticks = 0
         self._active = False
         self._toggle_mode = False
         self._option_held = False

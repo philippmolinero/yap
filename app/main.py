@@ -187,13 +187,12 @@ class YapApp(rumps.App):
         )
 
     def _on_hotkey_start(self):
+        # Already running in a daemon thread (dispatched from HotkeyManager._handle_down)
         self.pipeline.start_recording()
 
     def _on_hotkey_stop(self):
-        threading.Thread(
-            target=self.pipeline.stop_recording_and_process,
-            daemon=True,
-        ).start()
+        # Already running in a daemon thread (dispatched from HotkeyManager._handle_up)
+        self.pipeline.stop_recording_and_process()
 
     def _on_state_change(self, state: PipelineState):
         if state == PipelineState.RECORDING:
@@ -217,6 +216,12 @@ class YapApp(rumps.App):
 
         AppKit.NSOperationQueue.mainQueue().addOperationWithBlock_(update)
 
+        # Safety net: if we reached IDLE but PortAudio is still active,
+        # force-close the stream so the mic doesn't stay latched on.
+        if state == PipelineState.IDLE and self.recorder.is_recording:
+            logger.warning("Pipeline IDLE but recorder still active — force-stopping recorder")
+            threading.Thread(target=self.recorder.stop, daemon=True).start()
+
     def _on_stop_clicked(self, _):
         """Menu bar stop button — emergency escape hatch."""
         logger.info(
@@ -224,22 +229,31 @@ class YapApp(rumps.App):
             self.pipeline.state.value,
             self.recorder.is_recording,
         )
-        # Reset hotkey state so hold-to-talk doesn't re-trigger
+        # Immediately disable the button and reset hotkey state so
+        # hold-to-talk doesn't re-trigger, before any blocking calls.
+        self.stop_item.set_callback(None)
         self.hotkey_mgr.reset()
 
-        # Force stop the recorder directly in case pipeline is wedged
-        if self.recorder.is_recording:
-            logger.info("Force-stopping recorder")
-            self.recorder.stop()
+        # Run the actual stop off the main thread — recorder.stop() can
+        # block if PortAudio is in a bad state, which would freeze the UI.
+        def _do_stop():
+            if self.recorder.is_recording:
+                logger.info("Force-stopping recorder")
+                self.recorder.stop()
+            if self.pipeline.state != PipelineState.IDLE:
+                logger.info("Forcing pipeline state to IDLE")
+                self.pipeline._set_state(PipelineState.IDLE)
 
-        # If pipeline is stuck in a non-idle state, force it back
-        if self.pipeline.state != PipelineState.IDLE:
-            logger.info("Forcing pipeline state to IDLE")
-            self.pipeline._set_state(PipelineState.IDLE)
+        threading.Thread(target=_do_stop, daemon=True).start()
 
     def _on_silence(self):
         """Called from recorder when silence exceeds timeout — auto-stop."""
         logger.info("Silence detected — auto-stopping")
+        if self.pipeline.state != PipelineState.RECORDING:
+            if self.recorder.is_recording:
+                logger.warning("Silence callback while IDLE but recorder active — forcing recorder stop")
+                threading.Thread(target=self.recorder.stop, daemon=True).start()
+            return
         self.hotkey_mgr.reset()
         threading.Thread(
             target=self.pipeline.stop_recording_and_process,

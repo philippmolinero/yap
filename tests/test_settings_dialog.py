@@ -73,6 +73,36 @@ class TestSettingsDialogInit:
 
         mock_window.close.assert_called_once()
 
+    def test_paste_into_field_sets_value_and_focus(self):
+        from app.settings_dialog import SettingsDialog
+
+        dialog = SettingsDialog()
+        field = mock.Mock()
+        window = mock.Mock()
+        dialog._window = window
+
+        with mock.patch("app.settings_dialog._read_clipboard_text", return_value="sk-pasted"):
+            ok = dialog._paste_into_field(field)
+
+        assert ok is True
+        field.setStringValue_.assert_called_once_with("sk-pasted")
+        window.makeFirstResponder_.assert_called_once_with(field)
+
+    def test_paste_into_field_returns_false_on_empty_clipboard(self):
+        from app.settings_dialog import SettingsDialog
+
+        dialog = SettingsDialog()
+        field = mock.Mock()
+        window = mock.Mock()
+        dialog._window = window
+
+        with mock.patch("app.settings_dialog._read_clipboard_text", return_value=""):
+            ok = dialog._paste_into_field(field)
+
+        assert ok is False
+        field.setStringValue_.assert_not_called()
+        window.makeFirstResponder_.assert_not_called()
+
 
 class TestSettingsController:
     """Test _SettingsController delegates to dialog."""
@@ -94,3 +124,23 @@ class TestSettingsController:
 
         controller.cancelClicked_(None)
         mock_dialog._do_cancel.assert_called_once()
+
+    def test_controller_delegates_mistral_paste(self):
+        from app.settings_dialog import _SettingsController
+
+        mock_dialog = mock.Mock()
+        mock_dialog._mistral_field = mock.Mock()
+        controller = _SettingsController.alloc().initWithDialog_(mock_dialog)
+
+        controller.pasteMistralClicked_(None)
+        mock_dialog._paste_into_field.assert_called_once_with(mock_dialog._mistral_field)
+
+    def test_controller_delegates_groq_paste(self):
+        from app.settings_dialog import _SettingsController
+
+        mock_dialog = mock.Mock()
+        mock_dialog._groq_field = mock.Mock()
+        controller = _SettingsController.alloc().initWithDialog_(mock_dialog)
+
+        controller.pasteGroqClicked_(None)
+        mock_dialog._paste_into_field.assert_called_once_with(mock_dialog._groq_field)

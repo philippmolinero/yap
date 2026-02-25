@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <mask id="wave-cutout">
+      <rect width="512" height="512" fill="white"/>
+      <!-- Waveform carved out of the bubble: 5 bars of varying height, centered -->
+      <rect x="192" y="198" width="20" height="64" rx="10" fill="black"/>
+      <rect x="224" y="172" width="20" height="116" rx="10" fill="black"/>
+      <rect x="256" y="152" width="20" height="156" rx="10" fill="black"/>
+      <rect x="288" y="178" width="20" height="104" rx="10" fill="black"/>
+      <rect x="320" y="202" width="20" height="56" rx="10" fill="black"/>
+    </mask>
+    <clipPath id="icon-clip">
+      <rect width="512" height="512" rx="112"/>
+    </clipPath>
+  </defs>
+  <g clip-path="url(#icon-clip)">
+    <!-- Background -->
+    <rect width="512" height="512" fill="#2D2926"/>
+    <!-- Speech bubble with waveform punched out -->
+    <g mask="url(#wave-cutout)">
+      <!-- Bubble body: generous rounded rect -->
+      <rect x="104" y="96" width="304" height="268" rx="56" fill="#C27B5A"/>
+    </g>
+    <!-- Tail: organic curve, not a sharp triangle -->
+    <path fill="#C27B5A" d="M 180 352 Q 164 396, 136 420 Q 172 400, 196 364 Z"/>
+  </g>
+</svg>

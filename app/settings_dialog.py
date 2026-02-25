@@ -15,8 +15,39 @@ _WINDOW_HEIGHT = 240
 _FIELD_HEIGHT = 24
 _LABEL_WIDTH = 120
 _PADDING = 20
+_PASTE_BUTTON_WIDTH = 56
 _BUTTON_WIDTH = 80
 _BUTTON_HEIGHT = 32
+
+
+def _read_clipboard_text() -> str:
+    """Return UTF-8 clipboard text or empty string."""
+    try:
+        pasteboard = AppKit.NSPasteboard.generalPasteboard()
+        text = pasteboard.stringForType_(AppKit.NSPasteboardTypeString)
+        if text:
+            return str(text)
+    except Exception:
+        logger.exception("Failed to read clipboard text")
+    return ""
+
+
+class _SettingsWindow(AppKit.NSWindow):
+    """Window subclass to make Cmd+V paste work reliably in text fields."""
+
+    def performKeyEquivalent_(self, event):
+        try:
+            chars = str(event.charactersIgnoringModifiers() or "")
+            flags = int(event.modifierFlags())
+            command = bool(flags & AppKit.NSEventModifierFlagCommand)
+            if command and chars.lower() == "v":
+                responder = self.firstResponder()
+                if responder is not None and responder.respondsToSelector_("paste:"):
+                    AppKit.NSApp.sendAction_to_from_("paste:", responder, self)
+                    return True
+        except Exception:
+            logger.exception("Error handling Cmd+V in settings window")
+        return objc.super(_SettingsWindow, self).performKeyEquivalent_(event)
 
 
 class _SettingsController(AppKit.NSObject):
@@ -42,6 +73,20 @@ class _SettingsController(AppKit.NSObject):
             self._dialog._do_cancel()
         except Exception:
             logger.exception("Error in cancelClicked_")
+
+    @objc.IBAction
+    def pasteMistralClicked_(self, sender):
+        try:
+            self._dialog._paste_into_field(self._dialog._mistral_field)
+        except Exception:
+            logger.exception("Error in pasteMistralClicked_")
+
+    @objc.IBAction
+    def pasteGroqClicked_(self, sender):
+        try:
+            self._dialog._paste_into_field(self._dialog._groq_field)
+        except Exception:
+            logger.exception("Error in pasteGroqClicked_")
 
 
 class SettingsDialog:
@@ -78,7 +123,7 @@ class SettingsDialog:
         y = (screen.size.height - _WINDOW_HEIGHT) / 2
         rect = AppKit.NSMakeRect(x, y, _WINDOW_WIDTH, _WINDOW_HEIGHT)
 
-        self._window = AppKit.NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+        self._window = _SettingsWindow.alloc().initWithContentRect_styleMask_backing_defer_(
             rect,
             AppKit.NSWindowStyleMaskTitled | AppKit.NSWindowStyleMaskClosable,
             AppKit.NSBackingStoreBuffered,
@@ -98,16 +143,36 @@ class SettingsDialog:
         mistral_label.setAlignment_(AppKit.NSTextAlignmentRight)
         content.addSubview_(mistral_label)
 
+        field_x = _PADDING + _LABEL_WIDTH + 8
+        field_width = (
+            _WINDOW_WIDTH - _PADDING * 2 - _LABEL_WIDTH - 8 - _PASTE_BUTTON_WIDTH - 8
+        )
+        paste_x = field_x + field_width + 8
+
         self._mistral_field = AppKit.NSSecureTextField.alloc().initWithFrame_(
             AppKit.NSMakeRect(
-                _PADDING + _LABEL_WIDTH + 8,
+                field_x,
                 y_pos,
-                _WINDOW_WIDTH - _PADDING * 2 - _LABEL_WIDTH - 8,
+                field_width,
                 _FIELD_HEIGHT,
             )
         )
         self._mistral_field.setPlaceholderString_("sk-...")
         content.addSubview_(self._mistral_field)
+
+        mistral_paste_btn = AppKit.NSButton.alloc().initWithFrame_(
+            AppKit.NSMakeRect(
+                paste_x,
+                y_pos,
+                _PASTE_BUTTON_WIDTH,
+                _FIELD_HEIGHT,
+            )
+        )
+        mistral_paste_btn.setTitle_("Paste")
+        mistral_paste_btn.setBezelStyle_(AppKit.NSBezelStyleRounded)
+        mistral_paste_btn.setTarget_(self._controller)
+        mistral_paste_btn.setAction_("pasteMistralClicked:")
+        content.addSubview_(mistral_paste_btn)
 
         # --- Groq API Key ---
         y_pos -= _FIELD_HEIGHT + 16
@@ -119,14 +184,28 @@ class SettingsDialog:
 
         self._groq_field = AppKit.NSSecureTextField.alloc().initWithFrame_(
             AppKit.NSMakeRect(
-                _PADDING + _LABEL_WIDTH + 8,
+                field_x,
                 y_pos,
-                _WINDOW_WIDTH - _PADDING * 2 - _LABEL_WIDTH - 8,
+                field_width,
                 _FIELD_HEIGHT,
             )
         )
         self._groq_field.setPlaceholderString_("gsk_...")
         content.addSubview_(self._groq_field)
+
+        groq_paste_btn = AppKit.NSButton.alloc().initWithFrame_(
+            AppKit.NSMakeRect(
+                paste_x,
+                y_pos,
+                _PASTE_BUTTON_WIDTH,
+                _FIELD_HEIGHT,
+            )
+        )
+        groq_paste_btn.setTitle_("Paste")
+        groq_paste_btn.setBezelStyle_(AppKit.NSBezelStyleRounded)
+        groq_paste_btn.setTarget_(self._controller)
+        groq_paste_btn.setAction_("pasteGroqClicked:")
+        content.addSubview_(groq_paste_btn)
 
         # --- Cleanup Provider ---
         y_pos -= _FIELD_HEIGHT + 16
@@ -197,6 +276,17 @@ class SettingsDialog:
 
         self._window.makeKeyAndOrderFront_(None)
         AppKit.NSApp.activateIgnoringOtherApps_(True)
+        self._window.makeFirstResponder_(self._mistral_field)
+
+    def _paste_into_field(self, field) -> bool:
+        """Paste clipboard text into a given API key field."""
+        text = _read_clipboard_text()
+        if not text:
+            logger.info("Paste requested but clipboard has no text")
+            return False
+        field.setStringValue_(text)
+        self._window.makeFirstResponder_(field)
+        return True
 
     def _do_cancel(self):
         try:

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <style>
+      .mark { fill: #C27B5A; }
+    </style>
+  </defs>
+  <!-- Background -->
+  <rect width="512" height="512" rx="112" fill="#2D2926"/>
+  <!-- Speech bubble: rounded rectangle with subtle tail -->
+  <!-- Main bubble body -->
+  <rect class="mark" x="116" y="112" width="280" height="220" rx="48"/>
+  <!-- Tail: a clean triangular form at bottom-left, suggesting voice direction -->
+  <path class="mark" d="M 172 316 L 140 380 L 216 316 Z"/>
+</svg>

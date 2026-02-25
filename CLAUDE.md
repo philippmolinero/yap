@@ -10,10 +10,21 @@ Yap is a lightweight macOS menubar app for voice dictation. Hold Right Option to
 ## Quick Reference
 - Run: `python3 -m app.main` from project root (dev), or `open dist/Yap.app` (bundled)
 - Build: `./build.sh` (creates dist/Yap.app), `./create_dmg.sh` (creates DMG)
+- Update/Reinstall: `./update.sh` (stop old app, rebuild, reinstall, relaunch)
+- Full reset update: `./update.sh --full-clean` (also wipes config/backups + resets TCC)
+- Fast reinstall without build: `./update.sh --skip-build`
+- Finder launcher: double-click `update.command`
 - Config: `~/.config/yap/config.toml` (user), `config/default.toml` (bundled defaults)
 - Secrets: `~/.config/yap/secrets.toml` (API keys, managed via Settings dialog)
 - Logs: `~/.config/yap/yap.log` (bundled app only, overwritten each launch)
 - Env vars: `MISTRAL_API_KEY`, `GROQ_API_KEY` in `.env` (dev fallback)
+
+## Update Workflow
+- Day-to-day updates: run `./update.sh`
+- Deep cleanup when permissions/state feel broken: run `./update.sh --full-clean`
+- If paste stops working after update, re-enable Accessibility for `Yap`
+- If hotkey stops working after update, re-enable Input Monitoring for `Yap`
+- After `--full-clean`, you must re-enter API keys in Settings
 
 ## Architecture
 - Pipeline: hotkey → recorder → transcriber (Voxtral) → cleanup (Groq) → paster (pbcopy + Cmd+V)

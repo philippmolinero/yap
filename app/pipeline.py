@@ -58,13 +58,20 @@ class Pipeline:
 
     def stop_recording_and_process(self):
         """Stop recording, transcribe, clean, and paste."""
+        if self._state != PipelineState.RECORDING:
+            logger.warning("stop_recording_and_process called in state %s — ignoring", self._state.value)
+            return
+
         t_total = time.perf_counter()
 
         # Stop recording
         wav_bytes = self.recorder.stop()
         if not wav_bytes:
             logger.warning("No audio captured")
-            self._set_state(PipelineState.IDLE)
+            # Only reset to IDLE if we're still in RECORDING — a concurrent
+            # thread may have already advanced the state to PROCESSING.
+            if self._state == PipelineState.RECORDING:
+                self._set_state(PipelineState.IDLE)
             return
 
         self._set_state(PipelineState.PROCESSING)
