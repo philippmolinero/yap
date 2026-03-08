@@ -44,7 +44,7 @@ def test_bundled_app_path_only_returns_yap_bundle(monkeypatch):
 def test_fetch_available_update_returns_newer_release(monkeypatch, tmp_path):
     payload = {
         "tag_name": "v0.2.1",
-        "html_url": "https://github.com/philippmolinero/yap/releases/tag/v0.2.1",
+        "html_url": "https://github.com/philippmoeller-fr/yap/releases/tag/v0.2.1",
         "body": "Bug fixes",
         "assets": [
             {

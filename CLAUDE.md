@@ -76,4 +76,4 @@ Three separate permissions are required. Getting these wrong causes silent failu
 - After rebuilding, reset stale TCC: `tccutil reset ListenEvent com.yap.dictation`
 
 ## Git
-- Personal repo under `philippmolinero` GitHub account
+- Personal repo under `philippmoeller-fr` GitHub account
