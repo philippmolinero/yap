@@ -1,12 +1,15 @@
 """Microphone recording module: capture audio as WAV bytes."""
 
 import io
+import logging
 import threading
 import time as _time
 
 import numpy as np
 import sounddevice as sd
 import soundfile as sf
+
+logger = logging.getLogger(__name__)
 
 
 class Recorder:
@@ -25,6 +28,29 @@ class Recorder:
         self._silence_start: float | None = None
         self._silence_fired = False
         self._on_silence = None  # callable, fired once when silence exceeds timeout
+
+    def _reset_levels(self):
+        self._level = 0.0
+        self._silence_start = None
+        self._silence_fired = False
+
+    def _clear_frames(self):
+        with self._lock:
+            self._frames.clear()
+
+    def _close_stream(self, stream: sd.InputStream, *, abort: bool):
+        stop_method = stream.abort if abort else stream.stop
+        action = "abort" if abort else "stop"
+
+        try:
+            stop_method(ignore_errors=True)
+        except Exception:
+            logger.exception("Recorder stream %s failed", action)
+
+        try:
+            stream.close(ignore_errors=True)
+        except Exception:
+            logger.exception("Recorder stream close failed")
 
     def _callback(self, indata, frame_count, time_info, status):
         if status:
@@ -56,34 +82,32 @@ class Recorder:
 
     def start(self):
         """Start recording from the default microphone."""
-        # Be defensive: if an old stream is still around, close it first.
-        old_stream = None
         with self._stop_lock:
-            if self._stream is not None:
-                old_stream, self._stream = self._stream, None
-        if old_stream is not None:
-            try:
-                old_stream.stop()
-            except Exception:
-                pass
-            try:
-                old_stream.close()
-            except Exception:
-                pass
+            old_stream, self._stream = self._stream, None
+            if old_stream is not None:
+                logger.warning("Discarding stale recorder stream before start")
+                self._close_stream(old_stream, abort=True)
 
-        with self._lock:
-            self._frames.clear()
-        self._level = 0.0
-        self._silence_start = None
-        self._silence_fired = False
+            self._clear_frames()
+            self._reset_levels()
 
-        self._stream = sd.InputStream(
-            samplerate=self.sample_rate,
-            channels=1,
-            dtype="float32",
-            callback=self._callback,
-        )
-        self._stream.start()
+            stream = None
+            try:
+                stream = sd.InputStream(
+                    samplerate=self.sample_rate,
+                    channels=1,
+                    dtype="float32",
+                    callback=self._callback,
+                )
+                self._stream = stream
+                stream.start()
+            except Exception:
+                self._stream = None
+                self._clear_frames()
+                self._reset_levels()
+                if stream is not None:
+                    self._close_stream(stream, abort=True)
+                raise
 
     def stop(self) -> bytes:
         """Stop recording and return WAV bytes (PCM16).
@@ -95,11 +119,8 @@ class Recorder:
             stream, self._stream = self._stream, None
 
         if stream is not None:
-            stream.stop()
-            stream.close()
-        self._level = 0.0
-        self._silence_start = None
-        self._silence_fired = False
+            self._close_stream(stream, abort=False)
+        self._reset_levels()
 
         with self._lock:
             if not self._frames:
@@ -111,9 +132,25 @@ class Recorder:
         sf.write(buf, audio, self.sample_rate, format="WAV", subtype="PCM_16")
         return buf.getvalue()
 
+    def force_stop(self) -> bool:
+        """Abort and discard the current stream without processing audio."""
+        with self._stop_lock:
+            stream, self._stream = self._stream, None
+
+        self._clear_frames()
+        self._reset_levels()
+
+        if stream is None:
+            return False
+
+        self._close_stream(stream, abort=True)
+        return True
+
     @property
     def is_recording(self) -> bool:
-        return self._stream is not None and self._stream.active
+        with self._stop_lock:
+            stream = self._stream
+        return stream is not None and stream.active
 
 
 if __name__ == "__main__":

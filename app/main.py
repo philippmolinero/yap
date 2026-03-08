@@ -22,6 +22,8 @@ from app.resources import get_resource_path
 from app.settings_dialog import SettingsDialog
 from app.sounds import SoundFeedback
 from app.transcriber import Transcriber
+from app.updater import UpdateInfo, UpdateManager
+from app.version import APP_NAME, APP_VERSION, bundled_app_path
 
 logger = logging.getLogger(__name__)
 
@@ -65,10 +67,12 @@ class _SleepWakeObserver(AppKit.NSObject):
         try:
             logger.info("System going to sleep — stopping recording and event tap")
             app = self._app
-            # Stop any active recording
-            if app.pipeline.state != PipelineState.IDLE:
-                logger.info("Active recording detected, stopping pipeline")
-                app.pipeline.stop_recording_and_process()
+            if app.pipeline.state == PipelineState.RECORDING or app.recorder.is_recording:
+                logger.info("Active recording detected, cancelling before sleep")
+                app.hotkey_mgr.reset()
+                app.pipeline.cancel_recording(source="sleep")
+            elif app.pipeline.state == PipelineState.PROCESSING:
+                logger.info("Pipeline already processing during sleep")
             # Tear down the event tap
             app.hotkey_mgr.stop()
         except Exception:
@@ -114,6 +118,12 @@ class YapApp(rumps.App):
         # Settings dialog instance
         self._settings_dialog = None
 
+        # Updater state
+        self.updater = UpdateManager(current_app_path=bundled_app_path())
+        self._available_update: UpdateInfo | None = None
+        self._update_busy_title: str | None = None
+        self._update_lock = threading.Lock()
+
         # Build pipeline components
         self._build_pipeline()
 
@@ -139,23 +149,26 @@ class YapApp(rumps.App):
         self.stop_item = rumps.MenuItem("Stop Recording", callback=self._on_stop_clicked)
         self.stop_item.set_callback(None)  # hidden until recording
         self.recent_menu = rumps.MenuItem("Recent")
+        self.update_item = rumps.MenuItem("Check for Updates...", callback=self._on_update_item_clicked)
         self.menu = [
             self.status_item,
             self.stop_item,
             None,
             self.recent_menu,
             None,
+            self.update_item,
             rumps.MenuItem("Settings...", callback=self._open_settings),
             rumps.MenuItem("Open Config", callback=self._open_config),
             rumps.MenuItem("Open Vocabulary", callback=self._open_vocabulary),
             None,
             rumps.MenuItem("Quit", callback=self._quit),
         ]
+        self._refresh_update_item()
 
     def _build_pipeline(self):
         """Create recorder, transcriber, cleanup, and pipeline from current config."""
         if hasattr(self, "recorder") and self.recorder is not None:
-            self.recorder.stop()
+            self.recorder.force_stop()
         self.recorder = Recorder(
             sample_rate=self.cfg.transcription.sample_rate,
             silence_timeout=self.cfg.silence.timeout,
@@ -188,11 +201,11 @@ class YapApp(rumps.App):
 
     def _on_hotkey_start(self):
         # Already running in a daemon thread (dispatched from HotkeyManager._handle_down)
-        self.pipeline.start_recording()
+        self.pipeline.start_recording(source="hotkey_down")
 
     def _on_hotkey_stop(self):
         # Already running in a daemon thread (dispatched from HotkeyManager._handle_up)
-        self.pipeline.stop_recording_and_process()
+        self.pipeline.stop_recording_and_process(source="hotkey_up")
 
     def _on_state_change(self, state: PipelineState):
         if state == PipelineState.RECORDING:
@@ -220,7 +233,11 @@ class YapApp(rumps.App):
         # force-close the stream so the mic doesn't stay latched on.
         if state == PipelineState.IDLE and self.recorder.is_recording:
             logger.warning("Pipeline IDLE but recorder still active — force-stopping recorder")
-            threading.Thread(target=self.recorder.stop, daemon=True).start()
+            threading.Thread(
+                target=self.pipeline.cancel_recording,
+                kwargs={"source": "idle_safety_net"},
+                daemon=True,
+            ).start()
 
     def _on_stop_clicked(self, _):
         """Menu bar stop button — emergency escape hatch."""
@@ -234,29 +251,28 @@ class YapApp(rumps.App):
         self.stop_item.set_callback(None)
         self.hotkey_mgr.reset()
 
-        # Run the actual stop off the main thread — recorder.stop() can
-        # block if PortAudio is in a bad state, which would freeze the UI.
-        def _do_stop():
-            if self.recorder.is_recording:
-                logger.info("Force-stopping recorder")
-                self.recorder.stop()
-            if self.pipeline.state != PipelineState.IDLE:
-                logger.info("Forcing pipeline state to IDLE")
-                self.pipeline._set_state(PipelineState.IDLE)
-
-        threading.Thread(target=_do_stop, daemon=True).start()
+        threading.Thread(
+            target=self.pipeline.cancel_recording,
+            kwargs={"source": "menu_stop"},
+            daemon=True,
+        ).start()
 
     def _on_silence(self):
         """Called from recorder when silence exceeds timeout — auto-stop."""
         logger.info("Silence detected — auto-stopping")
         if self.pipeline.state != PipelineState.RECORDING:
             if self.recorder.is_recording:
-                logger.warning("Silence callback while IDLE but recorder active — forcing recorder stop")
-                threading.Thread(target=self.recorder.stop, daemon=True).start()
+                logger.warning("Silence callback while IDLE but recorder active — cancelling recorder")
+                threading.Thread(
+                    target=self.pipeline.cancel_recording,
+                    kwargs={"source": "silence_desync"},
+                    daemon=True,
+                ).start()
             return
         self.hotkey_mgr.reset()
         threading.Thread(
             target=self.pipeline.stop_recording_and_process,
+            kwargs={"source": "silence"},
             daemon=True,
         ).start()
 
@@ -286,6 +302,175 @@ class YapApp(rumps.App):
             args=(text, self.cfg.paste.delay_ms),
             daemon=True,
         ).start()
+
+    def _refresh_update_item(self):
+        def update():
+            if self._update_busy_title:
+                self.update_item.title = self._update_busy_title
+                self.update_item.set_callback(None)
+            elif self._available_update is not None:
+                self.update_item.title = f"Install Update {self._available_update.version}..."
+                self.update_item.set_callback(self._on_update_item_clicked)
+            else:
+                self.update_item.title = "Check for Updates..."
+                self.update_item.set_callback(self._on_update_item_clicked)
+
+        AppKit.NSOperationQueue.mainQueue().addOperationWithBlock_(update)
+
+    def _show_alert(
+        self,
+        title: str,
+        message: str,
+        *,
+        style=AppKit.NSAlertStyleInformational,
+    ):
+        def show():
+            try:
+                alert = AppKit.NSAlert.alloc().init()
+                alert.setMessageText_(title)
+                alert.setInformativeText_(message)
+                alert.setAlertStyle_(style)
+                alert.addButtonWithTitle_("OK")
+                alert.runModal()
+            except Exception:
+                logger.exception("Failed to show alert: %s", title)
+
+        AppKit.NSOperationQueue.mainQueue().addOperationWithBlock_(show)
+
+    def _show_confirm_alert(
+        self,
+        title: str,
+        message: str,
+        *,
+        confirm_label: str,
+        cancel_label: str,
+        on_confirm,
+    ):
+        def show():
+            try:
+                alert = AppKit.NSAlert.alloc().init()
+                alert.setMessageText_(title)
+                alert.setInformativeText_(message)
+                alert.setAlertStyle_(AppKit.NSAlertStyleInformational)
+                alert.addButtonWithTitle_(confirm_label)
+                alert.addButtonWithTitle_(cancel_label)
+                response = alert.runModal()
+                if response == AppKit.NSAlertFirstButtonReturn:
+                    on_confirm()
+            except Exception:
+                logger.exception("Failed to show confirmation alert: %s", title)
+
+        AppKit.NSOperationQueue.mainQueue().addOperationWithBlock_(show)
+
+    def _on_update_item_clicked(self, _):
+        if not self.updater.is_self_update_supported():
+            self._show_alert(
+                f"{APP_NAME} Update Unavailable",
+                "Self-update only works from the installed Yap.app bundle.",
+                style=AppKit.NSAlertStyleWarning,
+            )
+            return
+
+        if self._available_update is not None:
+            self._prompt_install_update(self._available_update)
+            return
+
+        threading.Thread(
+            target=self._check_for_updates,
+            kwargs={"interactive": True},
+            daemon=True,
+        ).start()
+
+    def _check_for_updates(self, *, interactive: bool):
+        if not self._update_lock.acquire(blocking=False):
+            if interactive:
+                self._show_alert(
+                    "Update Check Already Running",
+                    "Yap is already checking for updates.",
+                )
+            return
+
+        self._update_busy_title = "Checking for Updates..."
+        self._refresh_update_item()
+        try:
+            update = self.updater.fetch_available_update()
+        except Exception as exc:
+            logger.exception("Update check failed")
+            if interactive:
+                self._show_alert(
+                    "Update Check Failed",
+                    str(exc),
+                    style=AppKit.NSAlertStyleWarning,
+                )
+            return
+        finally:
+            self._update_busy_title = None
+            self._refresh_update_item()
+            self._update_lock.release()
+
+        self._available_update = update
+        self._refresh_update_item()
+
+        if update is None:
+            if interactive:
+                self._show_alert(
+                    f"{APP_NAME} Is Up To Date",
+                    f"You're already running version {APP_VERSION}.",
+                )
+            return
+
+        logger.info("Update available: %s", update.version)
+        if interactive:
+            self._prompt_install_update(update)
+
+    def _prompt_install_update(self, update: UpdateInfo):
+        if self.pipeline.state != PipelineState.IDLE:
+            self._show_alert(
+                "Finish Dictation First",
+                "Stop recording or wait for processing to finish before installing an update.",
+                style=AppKit.NSAlertStyleWarning,
+            )
+            return
+
+        self._show_confirm_alert(
+            f"Install {APP_NAME} {update.version}?",
+            (
+                f"Version {update.version} is available.\n\n"
+                f"{APP_NAME} will quit, install the update, and relaunch automatically."
+            ),
+            confirm_label="Install",
+            cancel_label="Later",
+            on_confirm=lambda: threading.Thread(
+                target=self._install_update,
+                args=(update,),
+                daemon=True,
+            ).start(),
+        )
+
+    def _install_update(self, update: UpdateInfo):
+        if not self._update_lock.acquire(blocking=False):
+            return
+
+        self._update_busy_title = f"Installing Update {update.version}..."
+        self._refresh_update_item()
+        try:
+            plan = self.updater.prepare_update(update)
+            self.updater.launch_installer(plan)
+        except Exception as exc:
+            logger.exception("Update install failed")
+            self._update_busy_title = None
+            self._refresh_update_item()
+            self._show_alert(
+                "Update Failed",
+                str(exc),
+                style=AppKit.NSAlertStyleWarning,
+            )
+            return
+        finally:
+            self._update_lock.release()
+
+        logger.info("Update staged successfully: %s", update.version)
+        self._quit(None)
 
     def _open_settings(self, _):
         """Open the settings dialog."""
@@ -318,6 +503,13 @@ class YapApp(rumps.App):
         timer.stop()
         self.hotkey_mgr.start()
         logger.info("Hotkey manager started")
+
+        if self.updater.is_self_update_supported() and self.updater.should_check_for_updates():
+            threading.Thread(
+                target=self._check_for_updates,
+                kwargs={"interactive": False},
+                daemon=True,
+            ).start()
 
         # Check for missing API keys after startup — auto-open settings
         if not self.cfg.mistral_api_key:

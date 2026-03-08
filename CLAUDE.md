@@ -10,6 +10,7 @@ Yap is a lightweight macOS menubar app for voice dictation. Hold Right Option to
 ## Quick Reference
 - Run: `python3 -m app.main` from project root (dev), or `open dist/Yap.app` (bundled)
 - Build: `./build.sh` (creates dist/Yap.app), `./create_dmg.sh` (creates DMG)
+- Release: `./release.sh` (build + DMG + GitHub release with zip + DMG assets)
 - Update/Reinstall: `./update.sh` (stop old app, rebuild, reinstall, relaunch)
 - Full reset update: `./update.sh --full-clean` (also wipes config/backups + resets TCC)
 - Fast reinstall without build: `./update.sh --skip-build`
@@ -21,6 +22,7 @@ Yap is a lightweight macOS menubar app for voice dictation. Hold Right Option to
 
 ## Update Workflow
 - Day-to-day updates: run `./update.sh`
+- Publish a release: run `./release.sh`
 - Deep cleanup when permissions/state feel broken: run `./update.sh --full-clean`
 - If paste stops working after update, re-enable Accessibility for `Yap`
 - If hotkey stops working after update, re-enable Input Monitoring for `Yap`

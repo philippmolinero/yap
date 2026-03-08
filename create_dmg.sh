@@ -3,8 +3,14 @@ set -e
 
 cd "$(dirname "$0")"
 
+VERSION="$(python3 - <<'PY'
+from app.version import APP_VERSION
+print(APP_VERSION)
+PY
+)"
+
 APP_PATH="dist/Yap.app"
-DMG_NAME="Yap-0.2.0.dmg"
+DMG_NAME="Yap-${VERSION}.dmg"
 DMG_PATH="dist/$DMG_NAME"
 VOLUME_NAME="Yap"
 TMP_DIR="dist/dmg_staging"
