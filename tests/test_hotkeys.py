@@ -18,6 +18,22 @@ class _InlineThread:
         self._target(*self._args, **self._kwargs)
 
 
+class _FakeWaitEvent:
+    def __init__(self, results):
+        self._results = list(results)
+
+    def wait(self, timeout):
+        if self._results:
+            return self._results.pop(0)
+        return False
+
+    def set(self):
+        return None
+
+    def clear(self):
+        return None
+
+
 class TestHotkeyRecovery:
     def test_watchdog_forces_release_when_key_state_is_up(self, monkeypatch):
         on_stop = mock.Mock()
@@ -150,3 +166,43 @@ class TestHotkeyRecovery:
         assert mgr._active is False
         assert mgr.forced_release_count == 0
         on_stop.assert_called_once()
+
+    def test_wait_for_input_monitoring_keeps_polling_until_granted(self, monkeypatch):
+        mgr = hotkeys.HotkeyManager(on_start=mock.Mock(), on_stop=mock.Mock())
+        preflight_results = iter([False, False, True])
+
+        monkeypatch.setattr(
+            hotkeys.Quartz,
+            "CGPreflightListenEventAccess",
+            lambda: next(preflight_results),
+        )
+        request = mock.Mock()
+        monkeypatch.setattr(hotkeys.Quartz, "CGRequestListenEventAccess", request)
+        monkeypatch.setattr(mgr, "_show_permission_alert_once", mock.Mock())
+        mgr._stop_event = _FakeWaitEvent([False, False])
+
+        assert mgr._wait_for_input_monitoring() is True
+        request.assert_called_once()
+        mgr._show_permission_alert_once.assert_called_once()
+
+    def test_wait_for_input_monitoring_exits_when_stopped(self, monkeypatch):
+        mgr = hotkeys.HotkeyManager(on_start=mock.Mock(), on_stop=mock.Mock())
+
+        monkeypatch.setattr(hotkeys.Quartz, "CGPreflightListenEventAccess", lambda: False)
+        request = mock.Mock()
+        monkeypatch.setattr(hotkeys.Quartz, "CGRequestListenEventAccess", request)
+        monkeypatch.setattr(mgr, "_show_permission_alert_once", mock.Mock())
+        mgr._stop_event = _FakeWaitEvent([True])
+
+        assert mgr._wait_for_input_monitoring() is False
+        request.assert_called_once()
+        mgr._show_permission_alert_once.assert_called_once()
+
+    def test_start_ignores_duplicate_running_thread(self, monkeypatch):
+        mgr = hotkeys.HotkeyManager(on_start=mock.Mock(), on_stop=mock.Mock())
+        mgr._thread = mock.Mock(is_alive=mock.Mock(return_value=True))
+        thread_ctor = mock.Mock()
+        monkeypatch.setattr(hotkeys.threading, "Thread", thread_ctor)
+
+        assert mgr.start() is False
+        thread_ctor.assert_not_called()
