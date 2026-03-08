@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 RIGHT_OPTION_KEYCODE = 61
 _RELEASE_WATCHDOG_INTERVAL_S = 0.2
 _RELEASE_MISS_TICKS_REQUIRED = 2
+_INPUT_MONITORING_POLL_INTERVAL_S = 1.0
 
 # CGEvent types
 _KEY_DOWN = Quartz.kCGEventKeyDown
@@ -51,11 +52,15 @@ class HotkeyManager:
         self._last_down_time = 0.0
         self._option_held = False
         self._thread: threading.Thread | None = None
+        self._thread_lock = threading.Lock()
+        self._stop_event = threading.Event()
         self._tap = None
         self._cf_run_loop = None  # CFRunLoop reference for clean shutdown
         self._release_watchdog: threading.Timer | None = None
         self._forced_release_count = 0
         self._release_miss_ticks = 0
+        self._permission_alert_lock = threading.Lock()
+        self._permission_alert_shown = False
 
     @property
     def forced_release_count(self) -> int:
@@ -232,22 +237,20 @@ class HotkeyManager:
         # In toggle mode, release is ignored
 
     def _wait_for_input_monitoring(self) -> bool:
-        """Request Input Monitoring permission and poll until granted."""
+        """Request Input Monitoring permission and poll until granted or stopped."""
         if Quartz.CGPreflightListenEventAccess():
             return True
 
-        logger.info("Requesting Input Monitoring permission...")
+        logger.warning("Input Monitoring permission missing — waiting for grant")
         Quartz.CGRequestListenEventAccess()
-        self._show_permission_alert()
+        self._show_permission_alert_once()
 
-        # Poll every 2 seconds for up to 2 minutes
-        for _ in range(60):
-            time.sleep(2)
+        while not self._stop_event.wait(_INPUT_MONITORING_POLL_INTERVAL_S):
             if Quartz.CGPreflightListenEventAccess():
                 logger.info("Input Monitoring permission granted")
                 return True
 
-        logger.error("Timed out waiting for Input Monitoring permission")
+        logger.info("Stopped while waiting for Input Monitoring permission")
         return False
 
     def _run_loop(self):
@@ -290,8 +293,14 @@ class HotkeyManager:
 
     def start(self):
         """Start monitoring in a daemon thread."""
-        self._thread = threading.Thread(target=self._run_loop, daemon=True)
-        self._thread.start()
+        with self._thread_lock:
+            if self._thread is not None and self._thread.is_alive():
+                logger.info("Hotkey manager start ignored — already running")
+                return False
+            self._stop_event.clear()
+            self._thread = threading.Thread(target=self._run_loop, daemon=True)
+            self._thread.start()
+            return True
 
     def reset(self):
         """Reset internal state (e.g. after an external stop like silence detection)."""
@@ -301,8 +310,13 @@ class HotkeyManager:
         self._toggle_mode = False
         self._option_held = False
 
-    def _show_permission_alert(self):
+    def _show_permission_alert_once(self):
         """Show a user-visible alert when Input Monitoring permission is missing."""
+        with self._permission_alert_lock:
+            if self._permission_alert_shown:
+                return
+            self._permission_alert_shown = True
+
         def show():
             try:
                 alert = AppKit.NSAlert.alloc().init()
@@ -313,7 +327,7 @@ class HotkeyManager:
                     "1. Open System Settings > Privacy & Security > Input Monitoring\n"
                     "2. Find 'Yap' and toggle it ON\n"
                     "3. If already ON, toggle it OFF then ON again\n\n"
-                    "Yap will activate automatically once permission is granted."
+                    "Yap will activate automatically after permission is granted. No restart is required."
                 )
                 alert.setAlertStyle_(AppKit.NSAlertStyleWarning)
                 alert.addButtonWithTitle_("Open System Settings")
@@ -333,17 +347,22 @@ class HotkeyManager:
     def stop(self):
         """Stop the event tap, CFRunLoop, and thread cleanly."""
         logger.info("Hotkey manager stopping")
+        self._stop_event.set()
         if self._tap is not None:
             Quartz.CGEventTapEnable(self._tap, False)
             self._tap = None
         if self._cf_run_loop is not None:
             Quartz.CFRunLoopStop(self._cf_run_loop)
             self._cf_run_loop = None
-        if self._thread is not None:
-            self._thread.join(timeout=3.0)
-            if self._thread.is_alive():
+        with self._thread_lock:
+            thread = self._thread
+        if thread is not None:
+            thread.join(timeout=3.0)
+            if thread.is_alive():
                 logger.warning("Hotkey thread did not exit within timeout")
-            self._thread = None
+            with self._thread_lock:
+                if self._thread is thread:
+                    self._thread = None
         self.reset()
         logger.info("Hotkey manager stopped")
 

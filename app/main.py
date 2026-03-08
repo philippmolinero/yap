@@ -502,7 +502,7 @@ class YapApp(rumps.App):
     def _start_hotkey_once(self, timer):
         timer.stop()
         self.hotkey_mgr.start()
-        logger.info("Hotkey manager started")
+        logger.info("Hotkey manager startup requested")
 
         if self.updater.is_self_update_supported() and self.updater.should_check_for_updates():
             threading.Thread(
