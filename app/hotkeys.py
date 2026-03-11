@@ -56,7 +56,8 @@ class HotkeyManager:
         self._stop_event = threading.Event()
         self._tap = None
         self._cf_run_loop = None  # CFRunLoop reference for clean shutdown
-        self._release_watchdog: threading.Timer | None = None
+        self._release_watchdog_thread: threading.Thread | None = None
+        self._release_watchdog_token = 0
         self._forced_release_count = 0
         self._release_miss_ticks = 0
         self._permission_alert_lock = threading.Lock()
@@ -67,40 +68,47 @@ class HotkeyManager:
         return self._forced_release_count
 
     def _cancel_release_watchdog(self):
-        timer = self._release_watchdog
-        self._release_watchdog = None
-        if timer is not None:
-            timer.cancel()
+        self._release_watchdog_token += 1
+        self._release_watchdog_thread = None
 
     def _schedule_release_watchdog(self):
-        self._cancel_release_watchdog()
-        timer = threading.Timer(
-            _RELEASE_WATCHDOG_INTERVAL_S,
-            self._release_watchdog_tick,
-        )
-        timer.daemon = True
-        self._release_watchdog = timer
-        timer.start()
+        self._release_watchdog_token += 1
+        token = self._release_watchdog_token
 
-    def _release_watchdog_tick(self):
-        self._release_watchdog = None
+        def _run():
+            try:
+                while True:
+                    time.sleep(_RELEASE_WATCHDOG_INTERVAL_S)
+                    if token != self._release_watchdog_token:
+                        return
+                    if self._release_watchdog_tick():
+                        return
+            except Exception:
+                logger.exception("Release watchdog loop failed")
+
+        thread = threading.Thread(target=_run, daemon=True)
+        self._release_watchdog_thread = thread
+        thread.start()
+
+    def _release_watchdog_tick(self) -> bool:
         if not self._option_held:
-            return
+            return True
 
         if self._is_key_physically_down():
             self._release_miss_ticks = 0
-            self._schedule_release_watchdog()
-            return
+            return False
 
         self._release_miss_ticks += 1
         if self._release_miss_ticks < _RELEASE_MISS_TICKS_REQUIRED:
-            self._schedule_release_watchdog()
-            return
+            return False
 
         if not self._is_key_physically_down():
             self._record_forced_release("watchdog")
             self._release_if_needed()
-            return
+            return True
+
+        self._release_miss_ticks = 0
+        return False
 
     def _is_key_physically_down(self) -> bool:
         key_down = False

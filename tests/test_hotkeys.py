@@ -41,17 +41,16 @@ class TestHotkeyRecovery:
         monkeypatch.setattr(hotkeys.threading, "Thread", _InlineThread)
         monkeypatch.setattr(hotkeys.Quartz, "CGEventSourceKeyState", lambda *_: False)
         monkeypatch.setattr(hotkeys.Quartz, "CGEventSourceFlagsState", lambda *_: 0)
-        monkeypatch.setattr(mgr, "_schedule_release_watchdog", mock.Mock())
 
         mgr._active = True
         mgr._toggle_mode = False
         mgr._option_held = True
 
-        mgr._release_watchdog_tick()
+        assert mgr._release_watchdog_tick() is False
         assert mgr._option_held is True
         assert mgr.forced_release_count == 0
 
-        mgr._release_watchdog_tick()
+        assert mgr._release_watchdog_tick() is True
         assert mgr._option_held is False
         assert mgr._active is False
         assert mgr.forced_release_count == 1
@@ -61,19 +60,16 @@ class TestHotkeyRecovery:
         mgr = hotkeys.HotkeyManager(on_start=mock.Mock(), on_stop=mock.Mock())
         monkeypatch.setattr(hotkeys.Quartz, "CGEventSourceKeyState", lambda *_: True)
         monkeypatch.setattr(hotkeys.Quartz, "CGEventSourceFlagsState", lambda *_: 0)
-        reschedule = mock.Mock()
-        monkeypatch.setattr(mgr, "_schedule_release_watchdog", reschedule)
 
         mgr._active = True
         mgr._toggle_mode = False
         mgr._option_held = True
 
-        mgr._release_watchdog_tick()
+        assert mgr._release_watchdog_tick() is False
 
         assert mgr._option_held is True
         assert mgr._active is True
         assert mgr.forced_release_count == 0
-        reschedule.assert_called_once()
 
     def test_timeout_event_forces_release_before_reenable(self, monkeypatch):
         on_stop = mock.Mock()
@@ -137,19 +133,16 @@ class TestHotkeyRecovery:
             "CGEventSourceFlagsState",
             lambda *_: hotkeys._RIGHT_OPTION_FLAG,
         )
-        reschedule = mock.Mock()
-        monkeypatch.setattr(mgr, "_schedule_release_watchdog", reschedule)
 
         mgr._active = True
         mgr._toggle_mode = False
         mgr._option_held = True
 
-        mgr._release_watchdog_tick()
+        assert mgr._release_watchdog_tick() is False
 
         assert mgr._option_held is True
         assert mgr._active is True
         assert mgr.forced_release_count == 0
-        reschedule.assert_called_once()
 
     def test_normal_release_path_does_not_increment_forced_counter(self, monkeypatch):
         on_stop = mock.Mock()

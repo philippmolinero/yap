@@ -113,6 +113,20 @@ def test_force_stop_aborts_active_stream(monkeypatch):
     assert recorder.is_recording is False
 
 
+def test_stop_can_use_abortive_path(monkeypatch):
+    stream = _FakeStream()
+    monkeypatch.setattr(recorder_module.sd, "InputStream", lambda **kwargs: stream)
+    recorder = recorder_module.Recorder()
+
+    recorder.start()
+    recorder.stop(abort=True)
+
+    assert stream.abort_calls == 1
+    assert stream.stop_calls == 0
+    assert stream.close_calls == 1
+    assert recorder.is_recording is False
+
+
 def test_start_failure_cleans_up_stream(monkeypatch):
     stream = _FakeStream(fail_start=True)
     monkeypatch.setattr(recorder_module.sd, "InputStream", lambda **kwargs: stream)
@@ -124,3 +138,91 @@ def test_start_failure_cleans_up_stream(monkeypatch):
     assert stream.abort_calls == 1
     assert stream.close_calls == 1
     assert recorder.is_recording is False
+
+
+def test_start_times_out_and_cleans_up_stream(monkeypatch):
+    start_release = threading.Event()
+
+    class _HungStartStream(_FakeStream):
+        def start(self):
+            start_release.wait(timeout=1.0)
+            self.active = True
+
+        def abort(self, ignore_errors=True):
+            self.abort_calls += 1
+            self.active = False
+            start_release.set()
+
+    stream = _HungStartStream()
+    monkeypatch.setattr(recorder_module.sd, "InputStream", lambda **kwargs: stream)
+    monkeypatch.setattr(recorder_module, "_START_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(recorder_module, "_STOP_ABORT_DRAIN_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(recorder_module, "_CLOSE_TIMEOUT_S", 0.05)
+
+    recorder = recorder_module.Recorder()
+
+    with pytest.raises(RuntimeError, match="start timed out"):
+        recorder.start()
+
+    assert stream.abort_calls == 1
+    assert stream.close_calls == 1
+    assert recorder.is_recording is False
+
+
+def test_stop_falls_back_to_abort_when_stream_stop_hangs(monkeypatch):
+    stop_release = threading.Event()
+
+    class _HungStopStream(_FakeStream):
+        def stop(self, ignore_errors=True):
+            self.stop_calls += 1
+            stop_release.wait(timeout=1.0)
+            self.active = False
+
+        def abort(self, ignore_errors=True):
+            self.abort_calls += 1
+            self.active = False
+            stop_release.set()
+
+    stream = _HungStopStream()
+    monkeypatch.setattr(recorder_module.sd, "InputStream", lambda **kwargs: stream)
+    monkeypatch.setattr(recorder_module, "_STOP_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(recorder_module, "_STOP_ABORT_DRAIN_TIMEOUT_S", 0.05)
+
+    recorder = recorder_module.Recorder()
+    recorder.start()
+
+    assert recorder.stop() == b""
+    assert stream.stop_calls == 1
+    assert stream.abort_calls == 1
+    assert stream.close_calls == 1
+
+
+def test_stop_returns_when_stream_close_hangs(monkeypatch):
+    close_release = threading.Event()
+
+    class _HungCloseStream(_FakeStream):
+        def close(self, ignore_errors=True):
+            self.close_calls += 1
+            close_release.wait(timeout=1.0)
+
+    stream = _HungCloseStream()
+    monkeypatch.setattr(recorder_module.sd, "InputStream", lambda **kwargs: stream)
+    monkeypatch.setattr(recorder_module, "_CLOSE_TIMEOUT_S", 0.01)
+
+    recorder = recorder_module.Recorder()
+    unhealthy_reasons: list[str] = []
+    recorder._on_backend_unhealthy = unhealthy_reasons.append
+    recorder.start()
+
+    stop_result: dict[str, bytes] = {}
+    worker = threading.Thread(
+        target=lambda: stop_result.setdefault("value", recorder.stop())
+    )
+    worker.start()
+    worker.join(timeout=0.5)
+
+    assert worker.is_alive() is False
+    assert stop_result["value"] == b""
+    assert stream.stop_calls == 1
+    assert stream.close_calls == 1
+    assert unhealthy_reasons == ["stream_teardown_timeout"]
