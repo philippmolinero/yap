@@ -11,6 +11,11 @@ import soundfile as sf
 
 logger = logging.getLogger(__name__)
 
+_START_TIMEOUT_S = 3.0
+_STOP_TIMEOUT_S = 1.0
+_STOP_ABORT_DRAIN_TIMEOUT_S = 0.25
+_CLOSE_TIMEOUT_S = 0.25
+
 
 class Recorder:
     """Push-to-talk recorder. Call start() to begin, stop() to get WAV bytes."""
@@ -28,6 +33,8 @@ class Recorder:
         self._silence_start: float | None = None
         self._silence_fired = False
         self._on_silence = None  # callable, fired once when silence exceeds timeout
+        self._on_backend_unhealthy = None  # callable(reason: str)
+        self._backend_unhealthy_notified = False
 
     def _reset_levels(self):
         self._level = 0.0
@@ -38,19 +45,89 @@ class Recorder:
         with self._lock:
             self._frames.clear()
 
+    def _mark_backend_unhealthy(self, reason: str):
+        if self._backend_unhealthy_notified:
+            return
+        self._backend_unhealthy_notified = True
+        logger.error("Recorder backend unhealthy: %s", reason)
+        callback = self._on_backend_unhealthy
+        if callback is None:
+            return
+        try:
+            callback(reason)
+        except Exception:
+            logger.exception("Recorder backend unhealthy callback failed")
+
+    def _run_stream_action(
+        self,
+        stream: sd.InputStream,
+        action_name: str,
+        *,
+        timeout_s: float,
+        raise_errors: bool = False,
+    ) -> bool:
+        finished = threading.Event()
+        error: list[Exception] = []
+
+        def _run():
+            try:
+                method = getattr(stream, action_name)
+                if action_name == "start":
+                    method()
+                else:
+                    method(ignore_errors=True)
+            except Exception as exc:
+                if raise_errors:
+                    error.append(exc)
+                else:
+                    logger.exception("Recorder stream %s failed", action_name)
+            finally:
+                finished.set()
+
+        threading.Thread(target=_run, daemon=True).start()
+        completed = finished.wait(timeout_s)
+        if completed and error:
+            raise error[0]
+        return completed
+
     def _close_stream(self, stream: sd.InputStream, *, abort: bool):
-        stop_method = stream.abort if abort else stream.stop
-        action = "abort" if abort else "stop"
+        backend_unhealthy = False
+        if abort:
+            if not self._run_stream_action(
+                stream,
+                "abort",
+                timeout_s=_STOP_ABORT_DRAIN_TIMEOUT_S,
+            ):
+                logger.warning(
+                    "Recorder stream abort timed out after %.2fs; leaving stream detached",
+                    _STOP_ABORT_DRAIN_TIMEOUT_S,
+                )
+                backend_unhealthy = True
+        else:
+            if not self._run_stream_action(stream, "stop", timeout_s=_STOP_TIMEOUT_S):
+                logger.warning(
+                    "Recorder stream stop timed out after %.2fs; aborting stream",
+                    _STOP_TIMEOUT_S,
+                )
+                if not self._run_stream_action(
+                    stream,
+                    "abort",
+                    timeout_s=_STOP_ABORT_DRAIN_TIMEOUT_S,
+                ):
+                    logger.warning(
+                        "Recorder stream abort timed out after stop timeout; leaving stream detached",
+                    )
+                    backend_unhealthy = True
 
-        try:
-            stop_method(ignore_errors=True)
-        except Exception:
-            logger.exception("Recorder stream %s failed", action)
+        if not self._run_stream_action(stream, "close", timeout_s=_CLOSE_TIMEOUT_S):
+            logger.warning(
+                "Recorder stream close timed out after %.2fs; leaving stream detached",
+                _CLOSE_TIMEOUT_S,
+            )
+            backend_unhealthy = True
 
-        try:
-            stream.close(ignore_errors=True)
-        except Exception:
-            logger.exception("Recorder stream close failed")
+        if backend_unhealthy:
+            self._mark_backend_unhealthy("stream_teardown_timeout")
 
     def _callback(self, indata, frame_count, time_info, status):
         if status:
@@ -100,7 +177,23 @@ class Recorder:
                     callback=self._callback,
                 )
                 self._stream = stream
-                stream.start()
+                if not self._run_stream_action(
+                    stream,
+                    "start",
+                    timeout_s=_START_TIMEOUT_S,
+                    raise_errors=True,
+                ):
+                    logger.warning(
+                        "Recorder stream start timed out after %.2fs; aborting stream",
+                        _START_TIMEOUT_S,
+                    )
+                    self._stream = None
+                    self._clear_frames()
+                    self._reset_levels()
+                    self._close_stream(stream, abort=True)
+                    stream = None
+                    self._mark_backend_unhealthy("stream_start_timeout")
+                    raise RuntimeError("Recorder stream start timed out")
             except Exception:
                 self._stream = None
                 self._clear_frames()
@@ -109,7 +202,7 @@ class Recorder:
                     self._close_stream(stream, abort=True)
                 raise
 
-    def stop(self) -> bytes:
+    def stop(self, *, abort: bool = False) -> bytes:
         """Stop recording and return WAV bytes (PCM16).
 
         Thread-safe: if two threads call stop() concurrently, only the first
@@ -119,7 +212,7 @@ class Recorder:
             stream, self._stream = self._stream, None
 
         if stream is not None:
-            self._close_stream(stream, abort=False)
+            self._close_stream(stream, abort=abort)
         self._reset_levels()
 
         with self._lock:

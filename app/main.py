@@ -3,6 +3,7 @@
 import collections
 import fcntl
 import logging
+import os
 import subprocess
 import sys
 import threading
@@ -125,6 +126,8 @@ class YapApp(rumps.App):
         self._update_lock = threading.Lock()
 
         # Build pipeline components
+        self._audio_recovery_pending = False
+        self._audio_recovery_started = False
         self._build_pipeline()
 
         # Overlay — waveform pulls audio level directly from recorder
@@ -175,6 +178,7 @@ class YapApp(rumps.App):
             silence_threshold=self.cfg.silence.threshold,
         )
         self.recorder._on_silence = self._on_silence
+        self.recorder._on_backend_unhealthy = self._on_recorder_backend_unhealthy
         transcriber = Transcriber(
             api_key=self.cfg.mistral_api_key,
             model=self.cfg.transcription.model,
@@ -239,6 +243,62 @@ class YapApp(rumps.App):
                 daemon=True,
             ).start()
 
+        if state == PipelineState.IDLE and self._audio_recovery_pending:
+            self._start_audio_recovery()
+
+    def _on_recorder_backend_unhealthy(self, reason: str):
+        logger.error("Recorder backend unhealthy reported by recorder: %s", reason)
+        self._audio_recovery_pending = True
+        if self.pipeline.state == PipelineState.IDLE:
+            self._start_audio_recovery()
+
+    def _start_audio_recovery(self):
+        if self._audio_recovery_started:
+            return
+        self._audio_recovery_started = True
+
+        def update():
+            self.status_item.title = "Status: Recovering Audio"
+            self.stop_item.set_callback(None)
+            self.overlay.hide()
+
+        AppKit.NSOperationQueue.mainQueue().addOperationWithBlock_(update)
+
+        threading.Thread(target=self._restart_after_audio_failure, daemon=True).start()
+
+    def _restart_after_audio_failure(self):
+        logger.error("Restarting Yap after unrecoverable audio backend failure")
+        self.hotkey_mgr.reset()
+
+        app_path = bundled_app_path()
+        if app_path is not None:
+            try:
+                script = (
+                    'PID="$1"\n'
+                    'APP="$2"\n'
+                    'while /bin/kill -0 "$PID" 2>/dev/null; do\n'
+                    '  /bin/sleep 0.25\n'
+                    'done\n'
+                    '/usr/bin/open "$APP"\n'
+                )
+                subprocess.Popen(
+                    [
+                        "/bin/bash",
+                        "-c",
+                        script,
+                        "yap-audio-recovery",
+                        str(os.getpid()),
+                        str(app_path),
+                    ],
+                    start_new_session=True,
+                )
+            except Exception:
+                logger.exception("Failed to schedule Yap relaunch after audio recovery")
+
+        AppKit.NSOperationQueue.mainQueue().addOperationWithBlock_(
+            lambda: self._quit(None)
+        )
+
     def _on_stop_clicked(self, _):
         """Menu bar stop button — emergency escape hatch."""
         logger.info(
@@ -272,7 +332,7 @@ class YapApp(rumps.App):
         self.hotkey_mgr.reset()
         threading.Thread(
             target=self.pipeline.stop_recording_and_process,
-            kwargs={"source": "silence"},
+            kwargs={"source": "silence", "abort_recording_stop": True},
             daemon=True,
         ).start()
 

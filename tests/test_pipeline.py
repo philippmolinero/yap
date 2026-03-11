@@ -13,6 +13,7 @@ class _FakeRecorder:
         self.wav_bytes = wav_bytes
         self.start_calls = 0
         self.stop_calls = 0
+        self.stop_abort_args: list[bool] = []
         self.force_stop_calls = 0
         self._is_recording = False
         self.start_entered: threading.Event | None = None
@@ -30,8 +31,9 @@ class _FakeRecorder:
             assert self.allow_start.wait(timeout=1.0)
         self._is_recording = True
 
-    def stop(self) -> bytes:
+    def stop(self, *, abort: bool = False) -> bytes:
         self.stop_calls += 1
+        self.stop_abort_args.append(abort)
         self._is_recording = False
         return self.wav_bytes
 
@@ -105,6 +107,7 @@ def test_pipeline_serializes_overlapping_start_and_stop(monkeypatch):
     assert pipeline.state == pipeline_module.PipelineState.IDLE
     assert recorder.start_calls == 1
     assert recorder.stop_calls == 1
+    assert recorder.stop_abort_args == [False]
     assert states == [
         pipeline_module.PipelineState.RECORDING,
         pipeline_module.PipelineState.PROCESSING,
@@ -177,3 +180,28 @@ def test_start_failure_leaves_pipeline_idle(monkeypatch):
     assert pipeline.start_recording(source="hotkey_down") is False
     assert pipeline.state == pipeline_module.PipelineState.IDLE
     assert recorder.start_calls == 1
+
+
+def test_silence_auto_stop_uses_abortive_recorder_stop(monkeypatch):
+    recorder = _FakeRecorder()
+    states: list[pipeline_module.PipelineState] = []
+    pipeline, pasted = _build_pipeline(recorder, _FakeTranscriber(), states, monkeypatch)
+
+    assert pipeline.start_recording(source="hotkey_down") is True
+    assert (
+        pipeline.stop_recording_and_process(
+            source="silence",
+            abort_recording_stop=True,
+        )
+        is True
+    )
+
+    assert recorder.stop_calls == 1
+    assert recorder.stop_abort_args == [True]
+    assert pipeline.state == pipeline_module.PipelineState.IDLE
+    assert states == [
+        pipeline_module.PipelineState.RECORDING,
+        pipeline_module.PipelineState.PROCESSING,
+        pipeline_module.PipelineState.IDLE,
+    ]
+    assert pasted == ["hello world"]

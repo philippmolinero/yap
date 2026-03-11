@@ -126,7 +126,12 @@ class Pipeline:
             )
             return True
 
-    def stop_recording_and_process(self, source: str = "external") -> bool:
+    def stop_recording_and_process(
+        self,
+        source: str = "external",
+        *,
+        abort_recording_stop: bool = False,
+    ) -> bool:
         """Stop recording, transcribe, clean, and paste."""
         with self._state_lock:
             if self._state != PipelineState.RECORDING:
@@ -142,7 +147,7 @@ class Pipeline:
             t_total = time.perf_counter()
             t_stop = time.perf_counter()
             try:
-                wav_bytes = self.recorder.stop()
+                wav_bytes = self.recorder.stop(abort=abort_recording_stop)
             except Exception:
                 logger.exception(
                     "Recorder stop failed [source=%s recording=%s]",
