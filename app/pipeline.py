@@ -324,6 +324,8 @@ if __name__ == "__main__":
         groq_api_key=cfg.groq_api_key,
         model=cfg.transcription.model,
         vocabulary=cfg.vocabulary,
+        allowed_languages=cfg.transcription.allowed_languages,
+        fallback_languages=cfg.transcription.fallback_languages,
     )
     cleanup = create_cleanup(
         provider=cfg.cleanup.provider,

@@ -300,6 +300,8 @@ class TestLoadConfig:
         assert cfg.transcription.provider == "groq"
         assert cfg.transcription.model == "whisper-large-v3-turbo"
         assert cfg.transcription.sample_rate == 16000
+        assert cfg.transcription.allowed_languages == ["en", "de"]
+        assert cfg.transcription.fallback_languages == ["de", "en"]
         assert cfg.cleanup.enabled is True
         assert cfg.cleanup.provider == "groq"
         assert cfg.cleanup.model == "llama-3.3-70b-versatile"

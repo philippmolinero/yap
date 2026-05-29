@@ -186,6 +186,8 @@ class YapApp(rumps.App):
             groq_api_key=self.cfg.groq_api_key,
             model=self.cfg.transcription.model,
             vocabulary=self.cfg.vocabulary,
+            allowed_languages=self.cfg.transcription.allowed_languages,
+            fallback_languages=self.cfg.transcription.fallback_languages,
         )
         cleanup_key = {"groq": self.cfg.groq_api_key, "mistral": self.cfg.mistral_api_key}.get(
             self.cfg.cleanup.provider, ""
