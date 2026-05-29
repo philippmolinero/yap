@@ -22,7 +22,7 @@ from app.recorder import Recorder
 from app.resources import get_resource_path
 from app.settings_dialog import SettingsDialog
 from app.sounds import SoundFeedback
-from app.transcriber import Transcriber
+from app.transcriber import create_transcriber
 from app.updater import UpdateInfo, UpdateManager
 from app.version import APP_NAME, APP_VERSION, bundled_app_path
 
@@ -139,6 +139,7 @@ class YapApp(rumps.App):
             on_start=self._on_hotkey_start,
             on_stop=self._on_hotkey_stop,
             keycode=self.cfg.hotkey.keycode,
+            keycodes=self.cfg.hotkey.keycodes,
             double_tap_ms=self.cfg.hotkey.double_tap_ms,
         )
 
@@ -179,8 +180,10 @@ class YapApp(rumps.App):
         )
         self.recorder._on_silence = self._on_silence
         self.recorder._on_backend_unhealthy = self._on_recorder_backend_unhealthy
-        transcriber = Transcriber(
-            api_key=self.cfg.mistral_api_key,
+        transcriber = create_transcriber(
+            provider=self.cfg.transcription.provider,
+            mistral_api_key=self.cfg.mistral_api_key,
+            groq_api_key=self.cfg.groq_api_key,
             model=self.cfg.transcription.model,
             vocabulary=self.cfg.vocabulary,
         )
@@ -572,8 +575,22 @@ class YapApp(rumps.App):
             ).start()
 
         # Check for missing API keys after startup — auto-open settings
-        if not self.cfg.mistral_api_key:
-            logger.warning("Mistral API key not set — opening Settings")
+        missing_transcription_key = (
+            self.cfg.transcription.provider == "groq" and not self.cfg.groq_api_key
+        ) or (
+            self.cfg.transcription.provider != "groq" and not self.cfg.mistral_api_key
+        )
+        missing_cleanup_key = (
+            self.cfg.cleanup.enabled
+            and self.cfg.cleanup.provider == "groq"
+            and not self.cfg.groq_api_key
+        ) or (
+            self.cfg.cleanup.enabled
+            and self.cfg.cleanup.provider == "mistral"
+            and not self.cfg.mistral_api_key
+        )
+        if missing_transcription_key or missing_cleanup_key:
+            logger.warning("Required API key not set — opening Settings")
             self._open_settings(None)
 
 

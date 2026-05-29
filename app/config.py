@@ -26,13 +26,15 @@ _BUNDLED_VOCAB = get_resource_path("config", "vocabulary.txt")
 
 @dataclass
 class HotkeyConfig:
-    keycode: int = 61
+    keycode: int = 62
+    keycodes: list[int] = field(default_factory=lambda: [61, 62])
     double_tap_ms: int = 300
 
 
 @dataclass
 class TranscriptionConfig:
-    model: str = "voxtral-mini-latest"
+    provider: str = "groq"
+    model: str = "whisper-large-v3-turbo"
     sample_rate: int = 16000
 
 
@@ -146,6 +148,9 @@ def load_config() -> AppConfig:
     secrets, preferences = _load_secrets()
     mistral_key = secrets.get("mistral", "") or os.environ.get("MISTRAL_API_KEY", "")
     groq_key = secrets.get("groq", "") or os.environ.get("GROQ_API_KEY", "")
+
+    if "provider" not in trans_raw and str(trans_raw.get("model", "")).startswith("voxtral-"):
+        trans_raw["provider"] = "mistral"
 
     cleanup_cfg = CleanupConfig(**cleanup_raw)
 

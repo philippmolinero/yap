@@ -294,15 +294,41 @@ class TestLoadConfig:
 
             cfg = load_config()
 
-        assert cfg.hotkey.keycode == 61
+        assert cfg.hotkey.keycode == 62
+        assert cfg.hotkey.keycodes == [61, 62]
         assert cfg.hotkey.double_tap_ms == 300
-        assert cfg.transcription.model == "voxtral-mini-latest"
+        assert cfg.transcription.provider == "groq"
+        assert cfg.transcription.model == "whisper-large-v3-turbo"
         assert cfg.transcription.sample_rate == 16000
         assert cfg.cleanup.enabled is True
         assert cfg.cleanup.provider == "groq"
+        assert cfg.cleanup.model == "llama-3.3-70b-versatile"
         assert cfg.paste.delay_ms == 50
         assert cfg.silence.timeout == 5.0
         assert cfg.silence.threshold == 0.008
+
+    def test_legacy_voxtral_model_infers_mistral_provider(self, tmp_path):
+        """Old configs did not have transcription.provider."""
+        config_dir = tmp_path / "yap"
+        config_dir.mkdir()
+        config_file = config_dir / "config.toml"
+        config_file.write_text(textwrap.dedent("""\
+            [transcription]
+            model = "voxtral-mini-latest"
+            sample_rate = 16000
+        """))
+
+        with mock.patch("app.config.CONFIG_DIR", config_dir), \
+             mock.patch("app.config.CONFIG_FILE", config_file), \
+             mock.patch("app.config.SECRETS_FILE", config_dir / "secrets.toml"), \
+             mock.patch("app.config.VOCAB_FILE", config_dir / "vocabulary.txt"), \
+             mock.patch.dict(os.environ, {}, clear=False):
+            from app.config import load_config
+
+            cfg = load_config()
+
+        assert cfg.transcription.provider == "mistral"
+        assert cfg.transcription.model == "voxtral-mini-latest"
 
 
 class TestEnsureConfigDir:

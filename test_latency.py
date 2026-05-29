@@ -17,7 +17,7 @@ load_dotenv()
 
 SAMPLE_RATE = 16000
 CHANNELS = 1
-MODEL = "voxtral-mini-latest"
+MODEL = "voxtral-mini-2602"
 
 
 def get_client() -> Mistral:

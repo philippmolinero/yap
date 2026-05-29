@@ -1,9 +1,11 @@
 [hotkey]
-keycode = 61                  # Right Option
+keycode = 62                  # Right Control
+keycodes = [61, 62]           # Right Option (MacBook) or Right Control (external)
 double_tap_ms = 300
 
 [transcription]
-model = "voxtral-mini-latest"
+provider = "groq"
+model = "whisper-large-v3-turbo"
 sample_rate = 16000
 
 [cleanup]

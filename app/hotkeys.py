@@ -1,6 +1,6 @@
 """Global hotkey monitoring via Quartz CGEventTap.
 
-Monitors Right Option (keycode 61) for:
+Monitors a configurable trigger key for:
 - Hold-to-talk: key_down -> on_start(), key_up -> on_stop()
 - Double-tap toggle: two key_downs within 300ms -> enters toggle mode, next tap -> on_stop()
 
@@ -17,8 +17,9 @@ import Quartz
 
 logger = logging.getLogger(__name__)
 
-# Right Option keycode
+# Keycodes for common trigger keys.
 RIGHT_OPTION_KEYCODE = 61
+RIGHT_CONTROL_KEYCODE = 62
 _RELEASE_WATCHDOG_INTERVAL_S = 0.2
 _RELEASE_MISS_TICKS_REQUIRED = 2
 _INPUT_MONITORING_POLL_INTERVAL_S = 1.0
@@ -28,8 +29,20 @@ _KEY_DOWN = Quartz.kCGEventKeyDown
 _KEY_UP = Quartz.kCGEventKeyUp
 _FLAGS_CHANGED = Quartz.kCGEventFlagsChanged
 
-# Right Option flag mask
+# Modifier key flag masks. Modifier keys report primarily via flagsChanged.
 _RIGHT_OPTION_FLAG = Quartz.kCGEventFlagMaskAlternate
+_MODIFIER_FLAGS_BY_KEYCODE = {
+    54: Quartz.kCGEventFlagMaskCommand,  # Right Command
+    55: Quartz.kCGEventFlagMaskCommand,  # Left Command
+    56: Quartz.kCGEventFlagMaskShift,  # Left Shift
+    57: Quartz.kCGEventFlagMaskAlphaShift,  # Caps Lock
+    58: Quartz.kCGEventFlagMaskAlternate,  # Left Option
+    59: Quartz.kCGEventFlagMaskControl,  # Left Control
+    60: Quartz.kCGEventFlagMaskShift,  # Right Shift
+    61: _RIGHT_OPTION_FLAG,  # Right Option
+    62: Quartz.kCGEventFlagMaskControl,  # Right Control
+    63: Quartz.kCGEventFlagMaskSecondaryFn,  # Fn
+}
 
 
 class HotkeyManager:
@@ -39,18 +52,29 @@ class HotkeyManager:
         self,
         on_start: Callable[[], None],
         on_stop: Callable[[], None],
-        keycode: int = RIGHT_OPTION_KEYCODE,
+        keycode: int = RIGHT_CONTROL_KEYCODE,
+        keycodes: list[int] | tuple[int, ...] | None = None,
         double_tap_ms: int = 300,
     ):
         self.on_start = on_start
         self.on_stop = on_stop
         self.keycode = keycode
+        configured_keycodes = list(keycodes or [])
+        if keycode not in configured_keycodes:
+            configured_keycodes.insert(0, keycode)
+        self.keycodes = tuple(dict.fromkeys(configured_keycodes))
+        self._keycode_set = set(self.keycodes)
+        self._modifier_flags_by_keycode = {
+            configured_keycode: _MODIFIER_FLAGS_BY_KEYCODE.get(configured_keycode)
+            for configured_keycode in self.keycodes
+        }
         self.double_tap_ms = double_tap_ms
 
         self._active = False  # Currently recording
         self._toggle_mode = False  # In toggle (hands-free) mode
         self._last_down_time = 0.0
         self._option_held = False
+        self._held_keycode: int | None = None
         self._thread: threading.Thread | None = None
         self._thread_lock = threading.Lock()
         self._stop_event = threading.Event()
@@ -114,27 +138,30 @@ class HotkeyManager:
         key_down = False
         flags_down = False
         key_check_ok = False
-        flags_check_ok = False
+        keycode = self._held_keycode if self._held_keycode is not None else self.keycode
+        modifier_flag = self._modifier_flags_by_keycode.get(keycode)
+        flags_check_ok = modifier_flag is None
 
         try:
             key_down = bool(
                 Quartz.CGEventSourceKeyState(
                     Quartz.kCGEventSourceStateCombinedSessionState,
-                    self.keycode,
+                    keycode,
                 )
             )
             key_check_ok = True
         except Exception:
             logger.exception("Release watchdog key state check failed")
 
-        try:
-            flags = Quartz.CGEventSourceFlagsState(
-                Quartz.kCGEventSourceStateCombinedSessionState
-            )
-            flags_down = bool(flags & _RIGHT_OPTION_FLAG)
-            flags_check_ok = True
-        except Exception:
-            logger.exception("Release watchdog flags check failed")
+        if modifier_flag is not None:
+            try:
+                flags = Quartz.CGEventSourceFlagsState(
+                    Quartz.kCGEventSourceStateCombinedSessionState
+                )
+                flags_down = bool(flags & modifier_flag)
+                flags_check_ok = True
+            except Exception:
+                logger.exception("Release watchdog flags check failed")
 
         # Modifier key reporting can differ by macOS version/hardware. Treat
         # either signal as "still down" to avoid false forced releases.
@@ -149,6 +176,7 @@ class HotkeyManager:
         if not self._option_held:
             return
         self._option_held = False
+        self._held_keycode = None
         self._release_miss_ticks = 0
         self._cancel_release_watchdog()
         self._handle_up()
@@ -177,32 +205,46 @@ class HotkeyManager:
             keycode = Quartz.CGEventGetIntegerValueField(
                 event, Quartz.kCGKeyboardEventKeycode
             )
-            if keycode != self.keycode:
+            if keycode not in self._keycode_set:
                 return event
             if event_type == _KEY_DOWN and not self._option_held:
                 self._option_held = True
+                self._held_keycode = keycode
                 self._handle_down()
-            elif event_type == _KEY_UP and self._option_held:
+            elif (
+                event_type == _KEY_UP
+                and self._option_held
+                and (self._held_keycode is None or keycode == self._held_keycode)
+            ):
                 self._release_if_needed()
             return event
 
-        # We monitor flagsChanged for modifier keys like Option
+        # We monitor flagsChanged for modifier keys like Option and Control.
         if event_type == _FLAGS_CHANGED:
             flags = Quartz.CGEventGetFlags(event)
             keycode = Quartz.CGEventGetIntegerValueField(
                 event, Quartz.kCGKeyboardEventKeycode
             )
 
-            if keycode != self.keycode:
+            if keycode not in self._keycode_set:
                 return event
 
-            option_down = bool(flags & _RIGHT_OPTION_FLAG)
+            modifier_flag = self._modifier_flags_by_keycode.get(keycode)
+            if modifier_flag is None:
+                return event
 
-            if option_down and not self._option_held:
+            modifier_down = bool(flags & modifier_flag)
+
+            if modifier_down and not self._option_held:
                 # Key pressed down
                 self._option_held = True
+                self._held_keycode = keycode
                 self._handle_down()
-            elif not option_down and self._option_held:
+            elif (
+                not modifier_down
+                and self._option_held
+                and (self._held_keycode is None or keycode == self._held_keycode)
+            ):
                 # Key released
                 self._release_if_needed()
 
@@ -384,7 +426,7 @@ class HotkeyManager:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-    print("Hotkey test — press Right Option to start/stop.")
+    print("Hotkey test — press Right Control to start/stop.")
     print("Hold = push-to-talk, double-tap = toggle mode.")
     print("Ctrl+C to quit.\n")
 
