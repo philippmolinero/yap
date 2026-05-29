@@ -9,7 +9,7 @@ from typing import Callable
 from app.cleanup import CleanupProvider
 from app.paster import paste
 from app.recorder import Recorder
-from app.transcriber import Transcriber
+from app.transcriber import TranscriptionProvider, create_transcriber
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ class Pipeline:
     def __init__(
         self,
         recorder: Recorder,
-        transcriber: Transcriber,
+        transcriber: TranscriptionProvider,
         cleanup: CleanupProvider,
         paste_delay_ms: int = 50,
         on_state_change: Callable[[PipelineState], None] | None = None,
@@ -310,13 +310,18 @@ if __name__ == "__main__":
     load_dotenv()
 
     cfg = load_config()
-    if not cfg.mistral_api_key:
+    if cfg.transcription.provider == "groq" and not cfg.groq_api_key:
+        print("Error: GROQ_API_KEY not set")
+        sys.exit(1)
+    if cfg.transcription.provider != "groq" and not cfg.mistral_api_key:
         print("Error: MISTRAL_API_KEY not set")
         sys.exit(1)
 
     recorder = Recorder(sample_rate=cfg.transcription.sample_rate)
-    transcriber = Transcriber(
-        api_key=cfg.mistral_api_key,
+    transcriber = create_transcriber(
+        provider=cfg.transcription.provider,
+        mistral_api_key=cfg.mistral_api_key,
+        groq_api_key=cfg.groq_api_key,
         model=cfg.transcription.model,
         vocabulary=cfg.vocabulary,
     )

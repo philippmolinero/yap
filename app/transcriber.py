@@ -5,11 +5,13 @@ doesn't expose the `context_bias` parameter yet.
 """
 
 import time
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 import httpx
 
 MISTRAL_TRANSCRIPTION_URL = "https://api.mistral.ai/v1/audio/transcriptions"
+GROQ_TRANSCRIPTION_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 
 
 @dataclass
@@ -19,10 +21,16 @@ class TranscriptionResult:
     latency: float
 
 
-class Transcriber:
+class TranscriptionProvider(ABC):
+    @abstractmethod
+    def transcribe(self, wav_bytes: bytes) -> TranscriptionResult:
+        ...
+
+
+class Transcriber(TranscriptionProvider):
     """Wraps the Voxtral transcription API."""
 
-    def __init__(self, api_key: str, model: str = "voxtral-mini-latest", vocabulary: list[str] | None = None):
+    def __init__(self, api_key: str, model: str = "voxtral-mini-2602", vocabulary: list[str] | None = None):
         self.api_key = api_key
         self.model = model
         self.vocabulary = vocabulary or []
@@ -69,6 +77,66 @@ class Transcriber:
             language=body.get("language", ""),
             latency=latency,
         )
+
+
+class GroqTranscriber(TranscriptionProvider):
+    """Wraps Groq's OpenAI-compatible Whisper transcription API."""
+
+    def __init__(self, api_key: str, model: str = "whisper-large-v3-turbo", language: str = ""):
+        self.api_key = api_key
+        self.model = model
+        self.language = language
+        self._client = httpx.Client(timeout=30.0)
+
+    def transcribe(self, wav_bytes: bytes) -> TranscriptionResult:
+        fields: list[tuple] = [
+            ("model", (None, self.model)),
+            ("file", ("recording.wav", wav_bytes, "audio/wav")),
+            ("response_format", (None, "verbose_json")),
+        ]
+        if self.language:
+            fields.append(("language", (None, self.language)))
+
+        headers = {"Authorization": f"Bearer {self.api_key}"}
+
+        t0 = time.perf_counter()
+        resp = self._client.post(
+            GROQ_TRANSCRIPTION_URL,
+            files=fields,
+            headers=headers,
+        )
+        resp.raise_for_status()
+        latency = time.perf_counter() - t0
+
+        body = resp.json()
+        return TranscriptionResult(
+            text=body.get("text", ""),
+            language=body.get("language", ""),
+            latency=latency,
+        )
+
+
+def create_transcriber(
+    *,
+    provider: str,
+    mistral_api_key: str = "",
+    groq_api_key: str = "",
+    model: str = "",
+    vocabulary: list[str] | None = None,
+) -> TranscriptionProvider:
+    """Factory: create the configured transcription provider."""
+    if provider == "groq":
+        if not groq_api_key:
+            raise ValueError("GROQ_API_KEY is required for Groq transcription")
+        return GroqTranscriber(api_key=groq_api_key, model=model or "whisper-large-v3-turbo")
+
+    if not mistral_api_key:
+        raise ValueError("MISTRAL_API_KEY is required for Mistral transcription")
+    return Transcriber(
+        api_key=mistral_api_key,
+        model=model or "voxtral-mini-2602",
+        vocabulary=vocabulary,
+    )
 
 
 if __name__ == "__main__":

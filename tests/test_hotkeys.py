@@ -102,7 +102,11 @@ class TestHotkeyRecovery:
 
     def test_key_up_event_releases_even_without_flags_changed(self, monkeypatch):
         on_stop = mock.Mock()
-        mgr = hotkeys.HotkeyManager(on_start=mock.Mock(), on_stop=on_stop)
+        mgr = hotkeys.HotkeyManager(
+            on_start=mock.Mock(),
+            on_stop=on_stop,
+            keycode=hotkeys.RIGHT_OPTION_KEYCODE,
+        )
         monkeypatch.setattr(hotkeys.threading, "Thread", _InlineThread)
         monkeypatch.setattr(
             hotkeys.Quartz,
@@ -143,6 +147,129 @@ class TestHotkeyRecovery:
         assert mgr._option_held is True
         assert mgr._active is True
         assert mgr.forced_release_count == 0
+
+    def test_right_control_flags_changed_starts_and_stops(self, monkeypatch):
+        on_start = mock.Mock()
+        on_stop = mock.Mock()
+        mgr = hotkeys.HotkeyManager(
+            on_start=on_start,
+            on_stop=on_stop,
+            keycode=hotkeys.RIGHT_CONTROL_KEYCODE,
+        )
+        monkeypatch.setattr(hotkeys.threading, "Thread", _InlineThread)
+        monkeypatch.setattr(mgr, "_schedule_release_watchdog", mock.Mock())
+        monkeypatch.setattr(
+            hotkeys.Quartz,
+            "CGEventGetIntegerValueField",
+            lambda *_: hotkeys.RIGHT_CONTROL_KEYCODE,
+        )
+
+        monkeypatch.setattr(
+            hotkeys.Quartz,
+            "CGEventGetFlags",
+            lambda *_: hotkeys.Quartz.kCGEventFlagMaskControl,
+        )
+        mgr._callback(
+            proxy=None,
+            event_type=hotkeys._FLAGS_CHANGED,
+            event=object(),
+            refcon=None,
+        )
+
+        assert mgr._option_held is True
+        assert mgr._active is True
+        on_start.assert_called_once()
+
+        monkeypatch.setattr(hotkeys.Quartz, "CGEventGetFlags", lambda *_: 0)
+        mgr._callback(
+            proxy=None,
+            event_type=hotkeys._FLAGS_CHANGED,
+            event=object(),
+            refcon=None,
+        )
+
+        assert mgr._option_held is False
+        assert mgr._active is False
+        on_stop.assert_called_once()
+
+    def test_multiple_modifier_keycodes_can_trigger(self, monkeypatch):
+        on_start = mock.Mock()
+        on_stop = mock.Mock()
+        mgr = hotkeys.HotkeyManager(
+            on_start=on_start,
+            on_stop=on_stop,
+            keycode=hotkeys.RIGHT_CONTROL_KEYCODE,
+            keycodes=[hotkeys.RIGHT_OPTION_KEYCODE, hotkeys.RIGHT_CONTROL_KEYCODE],
+        )
+        monkeypatch.setattr(hotkeys.threading, "Thread", _InlineThread)
+        monkeypatch.setattr(mgr, "_schedule_release_watchdog", mock.Mock())
+        monkeypatch.setattr(
+            hotkeys.Quartz,
+            "CGEventGetIntegerValueField",
+            lambda *_: hotkeys.RIGHT_OPTION_KEYCODE,
+        )
+
+        monkeypatch.setattr(
+            hotkeys.Quartz,
+            "CGEventGetFlags",
+            lambda *_: hotkeys.Quartz.kCGEventFlagMaskAlternate,
+        )
+        mgr._callback(
+            proxy=None,
+            event_type=hotkeys._FLAGS_CHANGED,
+            event=object(),
+            refcon=None,
+        )
+
+        assert mgr._option_held is True
+        assert mgr._held_keycode == hotkeys.RIGHT_OPTION_KEYCODE
+        assert mgr._active is True
+        on_start.assert_called_once()
+
+        monkeypatch.setattr(hotkeys.Quartz, "CGEventGetFlags", lambda *_: 0)
+        mgr._callback(
+            proxy=None,
+            event_type=hotkeys._FLAGS_CHANGED,
+            event=object(),
+            refcon=None,
+        )
+
+        assert mgr._option_held is False
+        assert mgr._held_keycode is None
+        assert mgr._active is False
+        on_stop.assert_called_once()
+
+    def test_other_configured_modifier_does_not_release_active_key(self, monkeypatch):
+        on_stop = mock.Mock()
+        mgr = hotkeys.HotkeyManager(
+            on_start=mock.Mock(),
+            on_stop=on_stop,
+            keycode=hotkeys.RIGHT_CONTROL_KEYCODE,
+            keycodes=[hotkeys.RIGHT_OPTION_KEYCODE, hotkeys.RIGHT_CONTROL_KEYCODE],
+        )
+        monkeypatch.setattr(
+            hotkeys.Quartz,
+            "CGEventGetIntegerValueField",
+            lambda *_: hotkeys.RIGHT_OPTION_KEYCODE,
+        )
+        monkeypatch.setattr(hotkeys.Quartz, "CGEventGetFlags", lambda *_: 0)
+
+        mgr._active = True
+        mgr._toggle_mode = False
+        mgr._option_held = True
+        mgr._held_keycode = hotkeys.RIGHT_CONTROL_KEYCODE
+
+        mgr._callback(
+            proxy=None,
+            event_type=hotkeys._FLAGS_CHANGED,
+            event=object(),
+            refcon=None,
+        )
+
+        assert mgr._option_held is True
+        assert mgr._held_keycode == hotkeys.RIGHT_CONTROL_KEYCODE
+        assert mgr._active is True
+        on_stop.assert_not_called()
 
     def test_normal_release_path_does_not_increment_forced_counter(self, monkeypatch):
         on_stop = mock.Mock()

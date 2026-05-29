@@ -16,7 +16,7 @@ CLEANUP_PROMPT = (
     "transcript. NEVER generate new content. NEVER translate.\n\n"
     "Allowed changes (NOTHING else):\n"
     "- Remove filler words: um, uh, like (as filler), you know, I mean, basically, sort of, "
-    "kind of, so yeah, okay so, actually\n"
+    "kind of, so yeah, okay so, actually, ähm, äh, halt (as filler), also (as filler)\n"
     "- Deduplicate stuttered/repeated words (e.g. 'wait wait wait' → 'wait')\n"
     "- Fix punctuation and capitalization\n"
     "- Questions MUST end with a question mark\n\n"
@@ -42,7 +42,7 @@ class CleanupProvider(ABC):
 
 
 class GroqCleanup(CleanupProvider):
-    """Cleanup via Groq (llama-3.3-70b-versatile)."""
+    """Cleanup via Groq."""
 
     def __init__(self, api_key: str, model: str = "llama-3.3-70b-versatile"):
         from groq import Groq
