@@ -36,6 +36,8 @@ class TranscriptionConfig:
     provider: str = "groq"
     model: str = "whisper-large-v3-turbo"
     sample_rate: int = 16000
+    allowed_languages: list[str] = field(default_factory=lambda: ["en", "de"])
+    fallback_languages: list[str] = field(default_factory=lambda: ["de", "en"])
 
 
 @dataclass

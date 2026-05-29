@@ -12,6 +12,21 @@ import httpx
 
 MISTRAL_TRANSCRIPTION_URL = "https://api.mistral.ai/v1/audio/transcriptions"
 GROQ_TRANSCRIPTION_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
+_CJK_RANGES = (
+    ("\u3040", "\u30ff"),  # Hiragana + Katakana
+    ("\u3400", "\u9fff"),  # CJK unified ideographs
+    ("\uf900", "\ufaff"),  # CJK compatibility ideographs
+    ("\uac00", "\ud7af"),  # Hangul
+)
+_LANGUAGE_ALIASES = {
+    "english": "en",
+    "german": "de",
+    "deutsch": "de",
+    "thai": "th",
+    "japanese": "ja",
+    "chinese": "zh",
+    "korean": "ko",
+}
 
 
 @dataclass
@@ -25,6 +40,35 @@ class TranscriptionProvider(ABC):
     @abstractmethod
     def transcribe(self, wav_bytes: bytes) -> TranscriptionResult:
         ...
+
+
+def normalize_language(language: str) -> str:
+    normalized = language.strip().lower().replace("_", "-")
+    if not normalized:
+        return ""
+    if normalized in _LANGUAGE_ALIASES:
+        return _LANGUAGE_ALIASES[normalized]
+    return normalized.split("-", 1)[0]
+
+
+def contains_cjk(text: str) -> bool:
+    for char in text:
+        if any(start <= char <= end for start, end in _CJK_RANGES):
+            return True
+    return False
+
+
+def _score_allowed_transcript(result: TranscriptionResult, allowed_languages: set[str]) -> int:
+    text = result.text.strip()
+    if not text:
+        return -100
+    score = len(text)
+    language = normalize_language(result.language)
+    if language in allowed_languages:
+        score += 1000
+    if contains_cjk(text):
+        score -= 5000
+    return score
 
 
 class Transcriber(TranscriptionProvider):
@@ -82,20 +126,59 @@ class Transcriber(TranscriptionProvider):
 class GroqTranscriber(TranscriptionProvider):
     """Wraps Groq's OpenAI-compatible Whisper transcription API."""
 
-    def __init__(self, api_key: str, model: str = "whisper-large-v3-turbo", language: str = ""):
+    def __init__(
+        self,
+        api_key: str,
+        model: str = "whisper-large-v3-turbo",
+        language: str = "",
+        allowed_languages: list[str] | None = None,
+        fallback_languages: list[str] | None = None,
+    ):
         self.api_key = api_key
         self.model = model
         self.language = language
+        self.allowed_languages = {
+            normalize_language(language)
+            for language in (allowed_languages or [])
+            if normalize_language(language)
+        }
+        self.fallback_languages = [
+            normalize_language(language)
+            for language in (fallback_languages or [])
+            if normalize_language(language)
+        ]
         self._client = httpx.Client(timeout=30.0)
 
     def transcribe(self, wav_bytes: bytes) -> TranscriptionResult:
+        result = self._transcribe_once(wav_bytes, language=self.language)
+        if self._is_allowed_result(result):
+            return result
+
+        if not self.allowed_languages or self.language:
+            return result
+
+        candidates = [result]
+        for language in self.fallback_languages:
+            if language not in self.allowed_languages:
+                continue
+            retry = self._transcribe_once(wav_bytes, language=language)
+            if retry.text.strip() and self._is_allowed_result(retry):
+                return retry
+            candidates.append(retry)
+
+        return max(
+            candidates,
+            key=lambda candidate: _score_allowed_transcript(candidate, self.allowed_languages),
+        )
+
+    def _transcribe_once(self, wav_bytes: bytes, language: str = "") -> TranscriptionResult:
         fields: list[tuple] = [
             ("model", (None, self.model)),
             ("file", ("recording.wav", wav_bytes, "audio/wav")),
             ("response_format", (None, "verbose_json")),
         ]
-        if self.language:
-            fields.append(("language", (None, self.language)))
+        if language:
+            fields.append(("language", (None, language)))
 
         headers = {"Authorization": f"Bearer {self.api_key}"}
 
@@ -115,6 +198,17 @@ class GroqTranscriber(TranscriptionProvider):
             latency=latency,
         )
 
+    def _is_allowed_result(self, result: TranscriptionResult) -> bool:
+        text = result.text.strip()
+        if not text:
+            return True
+        if contains_cjk(text):
+            return False
+        if not self.allowed_languages:
+            return True
+        language = normalize_language(result.language)
+        return not language or language in self.allowed_languages
+
 
 def create_transcriber(
     *,
@@ -123,12 +217,19 @@ def create_transcriber(
     groq_api_key: str = "",
     model: str = "",
     vocabulary: list[str] | None = None,
+    allowed_languages: list[str] | None = None,
+    fallback_languages: list[str] | None = None,
 ) -> TranscriptionProvider:
     """Factory: create the configured transcription provider."""
     if provider == "groq":
         if not groq_api_key:
             raise ValueError("GROQ_API_KEY is required for Groq transcription")
-        return GroqTranscriber(api_key=groq_api_key, model=model or "whisper-large-v3-turbo")
+        return GroqTranscriber(
+            api_key=groq_api_key,
+            model=model or "whisper-large-v3-turbo",
+            allowed_languages=allowed_languages,
+            fallback_languages=fallback_languages,
+        )
 
     if not mistral_api_key:
         raise ValueError("MISTRAL_API_KEY is required for Mistral transcription")
