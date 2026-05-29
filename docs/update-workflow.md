@@ -50,6 +50,21 @@ What it does:
 - Reinstalls to `/Applications/Yap.app`
 - Launches Yap
 
+`build.sh` automatically signs `dist/Yap.app` with the first available
+`Developer ID Application` or `Apple Development` code-signing identity. A
+stable signing identity is important because ad-hoc PyInstaller signatures can
+make macOS treat every rebuild as a different app for Input Monitoring and
+Accessibility.
+
+To force a specific identity:
+
+```bash
+YAP_CODESIGN_IDENTITY="Apple Development: you@example.com (TEAMID)" ./update.sh
+```
+
+If no identity is available, the build still works, but macOS may require
+permissions again after each rebuild.
+
 ## Full Reset Update
 
 ```bash
