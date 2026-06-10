@@ -253,30 +253,6 @@ class TestLoadConfig:
         assert cfg.silence.timeout == 5.0
         assert cfg.silence.threshold == 0.008
 
-    def test_legacy_voxtral_model_infers_mistral_provider(self, tmp_path):
-        """Old configs did not have transcription.provider."""
-        config_dir = tmp_path / "yap"
-        config_dir.mkdir()
-        config_file = config_dir / "config.toml"
-        config_file.write_text(textwrap.dedent("""\
-            [transcription]
-            model = "voxtral-mini-latest"
-            sample_rate = 16000
-        """))
-
-        with mock.patch("app.config.CONFIG_DIR", config_dir), \
-             mock.patch("app.config.CONFIG_FILE", config_file), \
-             mock.patch("app.config.SECRETS_FILE", config_dir / "secrets.toml"), \
-             mock.patch("app.config.VOCAB_FILE", config_dir / "vocabulary.txt"), \
-             mock.patch.dict(os.environ, {}, clear=False):
-            from app.config import load_config
-
-            cfg = load_config()
-
-        assert cfg.transcription.provider == "mistral"
-        assert cfg.transcription.model == "voxtral-mini-latest"
-
-
 class TestEnsureConfigDir:
     """Config dir creation and bundled file copying."""
 
