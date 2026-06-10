@@ -4,14 +4,20 @@ Uses httpx directly for the API call because the mistralai SDK (v1.9)
 doesn't expose the `context_bias` parameter yet.
 """
 
+import logging
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 import httpx
 
+logger = logging.getLogger(__name__)
+
 MISTRAL_TRANSCRIPTION_URL = "https://api.mistral.ai/v1/audio/transcriptions"
 GROQ_TRANSCRIPTION_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
+_RETRY_ATTEMPTS = 3
+_RETRY_BACKOFF_S = (0.5, 1.0)
+_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 _CJK_RANGES = (
     ("\u3040", "\u30ff"),  # Hiragana + Katakana
     ("\u3400", "\u9fff"),  # CJK unified ideographs
@@ -40,6 +46,48 @@ class TranscriptionProvider(ABC):
     @abstractmethod
     def transcribe(self, wav_bytes: bytes) -> TranscriptionResult:
         ...
+
+
+def _post_with_retry(
+    client: httpx.Client,
+    url: str,
+    *,
+    files: list[tuple],
+    headers: dict[str, str],
+) -> httpx.Response:
+    """POST with retries on transient failures (network errors, 429, 5xx).
+
+    Non-retryable HTTP errors (e.g. 401, 413) raise immediately.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(_RETRY_ATTEMPTS):
+        if attempt > 0:
+            backoff = _RETRY_BACKOFF_S[min(attempt - 1, len(_RETRY_BACKOFF_S) - 1)]
+            time.sleep(backoff)
+        try:
+            resp = client.post(url, files=files, headers=headers)
+            resp.raise_for_status()
+            return resp
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code not in _RETRYABLE_STATUS_CODES:
+                raise
+            last_exc = exc
+            logger.warning(
+                "Transcription request got HTTP %d (attempt %d/%d)",
+                exc.response.status_code,
+                attempt + 1,
+                _RETRY_ATTEMPTS,
+            )
+        except httpx.TransportError as exc:
+            last_exc = exc
+            logger.warning(
+                "Transcription request failed: %s (attempt %d/%d)",
+                exc,
+                attempt + 1,
+                _RETRY_ATTEMPTS,
+            )
+    assert last_exc is not None
+    raise last_exc
 
 
 def normalize_language(language: str) -> str:
@@ -107,12 +155,12 @@ class Transcriber(TranscriptionProvider):
         headers = {"Authorization": f"Bearer {self.api_key}"}
 
         t0 = time.perf_counter()
-        resp = self._client.post(
+        resp = _post_with_retry(
+            self._client,
             MISTRAL_TRANSCRIPTION_URL,
             files=fields,
             headers=headers,
         )
-        resp.raise_for_status()
         latency = time.perf_counter() - t0
 
         body = resp.json()
@@ -183,12 +231,12 @@ class GroqTranscriber(TranscriptionProvider):
         headers = {"Authorization": f"Bearer {self.api_key}"}
 
         t0 = time.perf_counter()
-        resp = self._client.post(
+        resp = _post_with_retry(
+            self._client,
             GROQ_TRANSCRIPTION_URL,
             files=fields,
             headers=headers,
         )
-        resp.raise_for_status()
         latency = time.perf_counter() - t0
 
         body = resp.json()

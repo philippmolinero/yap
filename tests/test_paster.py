@@ -52,6 +52,7 @@ def test_paste_shows_alert_when_osascript_fails(monkeypatch):
     )
     monkeypatch.setattr(paster, "_has_accessibility_permission", lambda: True)
     monkeypatch.setattr(paster, "_show_accessibility_alert_once", mock.Mock())
+    monkeypatch.setattr(paster, "_paste_via_cgevent", lambda: False)
     monkeypatch.setattr(paster.time, "sleep", lambda *_: None)
     monkeypatch.setattr(
         paster.subprocess,
@@ -67,7 +68,7 @@ def test_paste_shows_alert_when_osascript_fails(monkeypatch):
     paster._show_accessibility_alert_once.assert_called_once()
 
 
-def test_paste_succeeds_without_alert(monkeypatch):
+def test_paste_prefers_cgevent_over_osascript(monkeypatch):
     pasteboard = _FakePasteboard()
     monkeypatch.setattr(
         paster,
@@ -79,6 +80,64 @@ def test_paste_succeeds_without_alert(monkeypatch):
     )
     monkeypatch.setattr(paster, "_has_accessibility_permission", lambda: True)
     monkeypatch.setattr(paster, "_show_accessibility_alert_once", mock.Mock())
+    monkeypatch.setattr(paster, "_paste_via_cgevent", lambda: True)
+    monkeypatch.setattr(paster.time, "sleep", lambda *_: None)
+    run = mock.Mock()
+    monkeypatch.setattr(paster.subprocess, "run", run)
+
+    paster.paste("hello", delay_ms=0)
+
+    assert pasteboard.contents[0] == "hello"
+    run.assert_not_called()
+    paster._show_accessibility_alert_once.assert_not_called()
+
+
+def test_paste_uses_osascript_when_trust_state_is_unknown(monkeypatch):
+    """CGEvents are dropped silently without Accessibility — when the trust
+    check is inconclusive, paste must go through osascript, which reports errors."""
+    pasteboard = _FakePasteboard()
+    monkeypatch.setattr(
+        paster,
+        "AppKit",
+        SimpleNamespace(
+            NSPasteboard=SimpleNamespace(generalPasteboard=lambda: pasteboard),
+            NSPasteboardTypeString="public.utf8-plain-text",
+        ),
+    )
+    monkeypatch.setattr(paster, "_has_accessibility_permission", lambda: None)
+    monkeypatch.setattr(paster, "_show_accessibility_alert_once", mock.Mock())
+    cgevent = mock.Mock(return_value=True)
+    monkeypatch.setattr(paster, "_paste_via_cgevent", cgevent)
+    monkeypatch.setattr(paster.time, "sleep", lambda *_: None)
+    run = mock.Mock(return_value=SimpleNamespace(returncode=0, stderr=""))
+    monkeypatch.setattr(paster.subprocess, "run", run)
+
+    paster.paste("hello", delay_ms=0)
+
+    cgevent.assert_not_called()
+    run.assert_called_once()
+    paster._show_accessibility_alert_once.assert_not_called()
+
+
+def test_accessibility_check_returns_bool():
+    """The ctypes-based AXIsProcessTrusted must load and return a bool
+    (works in both dev and PyInstaller bundles, unlike Quartz's lazy import)."""
+    assert paster._has_accessibility_permission() in (True, False)
+
+
+def test_paste_falls_back_to_osascript_without_alert(monkeypatch):
+    pasteboard = _FakePasteboard()
+    monkeypatch.setattr(
+        paster,
+        "AppKit",
+        SimpleNamespace(
+            NSPasteboard=SimpleNamespace(generalPasteboard=lambda: pasteboard),
+            NSPasteboardTypeString="public.utf8-plain-text",
+        ),
+    )
+    monkeypatch.setattr(paster, "_has_accessibility_permission", lambda: True)
+    monkeypatch.setattr(paster, "_show_accessibility_alert_once", mock.Mock())
+    monkeypatch.setattr(paster, "_paste_via_cgevent", lambda: False)
     monkeypatch.setattr(paster.time, "sleep", lambda *_: None)
     monkeypatch.setattr(
         paster.subprocess,

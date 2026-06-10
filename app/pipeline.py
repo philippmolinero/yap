@@ -4,6 +4,7 @@ import logging
 import threading
 import time
 from enum import Enum
+from pathlib import Path
 from typing import Callable
 
 from app.cleanup import CleanupProvider
@@ -34,6 +35,8 @@ class Pipeline:
         paste_delay_ms: int = 50,
         on_state_change: Callable[[PipelineState], None] | None = None,
         on_complete: Callable[[str], None] | None = None,
+        on_error: Callable[[str], None] | None = None,
+        failed_recording_path: Path | None = None,
     ):
         self.recorder = recorder
         self.transcriber = transcriber
@@ -41,6 +44,9 @@ class Pipeline:
         self.paste_delay_ms = paste_delay_ms
         self._on_state_change = on_state_change
         self._on_complete = on_complete
+        self._on_error = on_error
+        self._failed_recording_path = failed_recording_path
+        self._failed_wav: bytes | None = None
         self._state = PipelineState.IDLE
         self._state_lock = threading.RLock()
         self._recording_id_seq = 0
@@ -189,6 +195,18 @@ class Pipeline:
                 recording_id=recording_id,
             )
 
+        return self._process_audio(wav_bytes, source, recording_id, t_total)
+
+    def _process_audio(
+        self,
+        wav_bytes: bytes,
+        source: str,
+        recording_id: int | None,
+        t_total: float,
+        *,
+        from_retry: bool = False,
+    ) -> bool:
+        """Transcribe, clean, and paste audio. Caller must have set PROCESSING state."""
         # Transcribe
         try:
             result = self.transcriber.transcribe(wav_bytes)
@@ -198,12 +216,18 @@ class Pipeline:
                 source,
                 recording_id if recording_id is not None else "-",
             )
+            self._stash_failed_recording(wav_bytes)
             self._set_state(
                 PipelineState.IDLE,
                 source=f"{source}:transcription_error",
                 recording_id=recording_id,
             )
+            self._notify_error("transcription_failed")
             return False
+
+        if from_retry:
+            # The stashed audio reached the API — the copy is no longer needed.
+            self._clear_failed_recording()
 
         if not result.text.strip():
             logger.info(
@@ -297,6 +321,95 @@ class Pipeline:
                 recording_id=recording_id,
             )
             return True
+
+    @property
+    def has_failed_recording(self) -> bool:
+        """True if a transcription-failed recording is available for retry."""
+        if self._failed_wav:
+            return True
+        path = self._failed_recording_path
+        try:
+            return path is not None and path.exists() and path.stat().st_size > 0
+        except OSError:
+            return False
+
+    def retry_last_recording(self, source: str = "retry") -> bool:
+        """Re-run transcription for the last recording that failed to transcribe."""
+        with self._state_lock:
+            if self._state != PipelineState.IDLE:
+                logger.warning(
+                    "retry_last_recording ignored in state %s [source=%s]",
+                    self._state.value,
+                    source,
+                )
+                return False
+
+            wav_bytes = self._load_failed_recording()
+            if not wav_bytes:
+                logger.info("retry_last_recording: no failed recording available")
+                return False
+
+            self._recording_id_seq += 1
+            recording_id = self._recording_id_seq
+            self._active_recording_id = recording_id
+            self._set_state(
+                PipelineState.PROCESSING,
+                source=source,
+                recording_id=recording_id,
+            )
+
+        return self._process_audio(
+            wav_bytes,
+            source,
+            recording_id,
+            time.perf_counter(),
+            from_retry=True,
+        )
+
+    def _stash_failed_recording(self, wav_bytes: bytes):
+        """Keep the audio of a failed transcription so the user can retry it."""
+        self._failed_wav = wav_bytes
+        path = self._failed_recording_path
+        if path is None:
+            return
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(wav_bytes)
+            path.chmod(0o600)
+            logger.info("Saved failed recording to %s (%d bytes)", path, len(wav_bytes))
+        except OSError:
+            logger.exception("Failed to save recording to %s", path)
+
+    def _load_failed_recording(self) -> bytes:
+        if self._failed_wav:
+            return self._failed_wav
+        path = self._failed_recording_path
+        if path is None:
+            return b""
+        try:
+            if path.exists():
+                return path.read_bytes()
+        except OSError:
+            logger.exception("Failed to read saved recording from %s", path)
+        return b""
+
+    def _clear_failed_recording(self):
+        self._failed_wav = None
+        path = self._failed_recording_path
+        if path is None:
+            return
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            logger.exception("Failed to remove saved recording %s", path)
+
+    def _notify_error(self, reason: str):
+        if self._on_error is None:
+            return
+        try:
+            self._on_error(reason)
+        except Exception:
+            logger.exception("on_error callback error")
 
 
 if __name__ == "__main__":

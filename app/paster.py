@@ -1,5 +1,6 @@
 """Clipboard + paste module: copy text and simulate Cmd+V in the active window."""
 
+import ctypes
 import logging
 import subprocess
 import threading
@@ -11,6 +12,7 @@ import Quartz
 logger = logging.getLogger(__name__)
 _ACCESSIBILITY_ALERT_LOCK = threading.Lock()
 _ACCESSIBILITY_ALERT_SHOWN = False
+_V_KEYCODE = 9  # ANSI 'v'
 
 
 def _show_accessibility_alert_once():
@@ -48,16 +50,58 @@ def _show_accessibility_alert_once():
     AppKit.NSOperationQueue.mainQueue().addOperationWithBlock_(show)
 
 
+_AX_TRUSTED_FN = None
+
+
+def _load_ax_is_process_trusted():
+    """Load AXIsProcessTrusted via ctypes.
+
+    PyInstaller does not bundle the ApplicationServices PyObjC module, and
+    Quartz's lazy import of AXIsProcessTrusted fails inside the app bundle —
+    loading the system framework directly works in both dev and bundled mode.
+    """
+    lib = ctypes.cdll.LoadLibrary(
+        "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices"
+    )
+    fn = lib.AXIsProcessTrusted
+    fn.restype = ctypes.c_bool
+    fn.argtypes = []
+    return fn
+
+
 def _has_accessibility_permission() -> bool | None:
+    global _AX_TRUSTED_FN
     try:
-        return bool(Quartz.AXIsProcessTrusted())
+        if _AX_TRUSTED_FN is None:
+            _AX_TRUSTED_FN = _load_ax_is_process_trusted()
+        return bool(_AX_TRUSTED_FN())
     except Exception:
         logger.exception("Accessibility trust check failed")
         return None
 
 
+def _paste_via_cgevent() -> bool:
+    """Post a synthetic Cmd+V via Quartz. Much faster than an osascript subprocess."""
+    try:
+        source = Quartz.CGEventSourceCreate(
+            Quartz.kCGEventSourceStateCombinedSessionState
+        )
+        key_down = Quartz.CGEventCreateKeyboardEvent(source, _V_KEYCODE, True)
+        key_up = Quartz.CGEventCreateKeyboardEvent(source, _V_KEYCODE, False)
+        if key_down is None or key_up is None:
+            return False
+        Quartz.CGEventSetFlags(key_down, Quartz.kCGEventFlagMaskCommand)
+        Quartz.CGEventSetFlags(key_up, Quartz.kCGEventFlagMaskCommand)
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, key_down)
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, key_up)
+        return True
+    except Exception:
+        logger.exception("CGEvent paste failed, falling back to osascript")
+        return False
+
+
 def paste(text: str, delay_ms: int = 50):
-    """Set clipboard via NSPasteboard and trigger Cmd+V via AppleScript.
+    """Set clipboard via NSPasteboard and trigger Cmd+V (CGEvent, osascript fallback).
 
     The Cmd+V keystroke may fail without Accessibility permission — in that
     case a warning is logged but we don't raise (the text is still on the clipboard).
@@ -76,7 +120,12 @@ def paste(text: str, delay_ms: int = 50):
         _show_accessibility_alert_once()
         return
 
-    # Simulate Cmd+V
+    # Simulate Cmd+V natively — but only when Accessibility is confirmed:
+    # without it macOS drops CGEvents silently, while osascript reports an
+    # error we can surface. Unknown trust state therefore goes to osascript.
+    if trusted is True and _paste_via_cgevent():
+        return
+
     result = subprocess.run(
         [
             "osascript",
