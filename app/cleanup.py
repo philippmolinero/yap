@@ -72,7 +72,7 @@ def _looks_like_meta_response(text: str) -> bool:
 class GroqCleanup(CleanupProvider):
     """Cleanup via Groq."""
 
-    def __init__(self, api_key: str, model: str = "llama-3.3-70b-versatile"):
+    def __init__(self, api_key: str, model: str = "meta-llama/llama-4-scout-17b-16e-instruct"):
         from groq import Groq
         self.client = Groq(api_key=api_key)
         self.model = model
@@ -142,7 +142,7 @@ def create_cleanup(provider: str, api_key: str = "", model: str = "", enabled: b
         return NoopCleanup()
 
     if provider == "groq" and api_key:
-        return GroqCleanup(api_key=api_key, model=model or "llama-3.3-70b-versatile")
+        return GroqCleanup(api_key=api_key, model=model or "meta-llama/llama-4-scout-17b-16e-instruct")
 
     if provider == "mistral" and api_key:
         return MistralCleanup(api_key=api_key, model=model or "mistral-small-latest")
