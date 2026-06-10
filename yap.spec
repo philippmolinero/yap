@@ -17,6 +17,8 @@ a = Analysis(
         ("assets/icon_menubar.png", "assets"),
         ("assets/icon_app.png", "assets"),
         ("assets/ui_click.wav", "assets"),
+        ("assets/record_start.wav", "assets"),
+        ("assets/record_stop.wav", "assets"),
     ],
     hiddenimports=[
         "rumps",

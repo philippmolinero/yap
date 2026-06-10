@@ -14,6 +14,7 @@ import rumps
 
 from app.cleanup import create_cleanup
 from app.config import CONFIG_DIR, CONFIG_FILE, VOCAB_FILE, load_config
+from app.history import load_history, save_history
 from app.hotkeys import HotkeyManager
 from app.overlay import OverlayState, RecordingOverlay
 from app.paster import paste
@@ -29,6 +30,9 @@ from app.version import APP_NAME, APP_VERSION, bundled_app_path
 logger = logging.getLogger(__name__)
 
 _ICON_PATH = str(get_resource_path("assets", "icon_menubar.png"))
+HISTORY_FILE = CONFIG_DIR / "history.json"
+FAILED_RECORDING_FILE = CONFIG_DIR / "last_failed_recording.wav"
+_HISTORY_LIMIT = 15
 
 
 class _SleepWakeObserver(AppKit.NSObject):
@@ -113,8 +117,11 @@ class YapApp(rumps.App):
         # Sound feedback
         self.sounds = SoundFeedback()
 
-        # Dictation history (most recent first)
-        self._history: collections.deque[str] = collections.deque(maxlen=15)
+        # Dictation history (most recent first), persisted across restarts
+        self._history: collections.deque[str] = collections.deque(
+            load_history(HISTORY_FILE, limit=_HISTORY_LIMIT),
+            maxlen=_HISTORY_LIMIT,
+        )
 
         # Settings dialog instance
         self._settings_dialog = None
@@ -152,11 +159,14 @@ class YapApp(rumps.App):
         self.status_item.set_callback(None)
         self.stop_item = rumps.MenuItem("Stop Recording", callback=self._on_stop_clicked)
         self.stop_item.set_callback(None)  # hidden until recording
+        self.retry_item = rumps.MenuItem("Retry Failed Dictation", callback=self._on_retry_clicked)
+        self.retry_item.set_callback(None)  # hidden until a dictation fails
         self.recent_menu = rumps.MenuItem("Recent")
         self.update_item = rumps.MenuItem("Check for Updates...", callback=self._on_update_item_clicked)
         self.menu = [
             self.status_item,
             self.stop_item,
+            self.retry_item,
             None,
             self.recent_menu,
             None,
@@ -168,6 +178,8 @@ class YapApp(rumps.App):
             rumps.MenuItem("Quit", callback=self._quit),
         ]
         self._refresh_update_item()
+        self._rebuild_recent_menu()
+        self._refresh_retry_item()
 
     def _build_pipeline(self):
         """Create recorder, transcriber, cleanup, and pipeline from current config."""
@@ -206,6 +218,8 @@ class YapApp(rumps.App):
             paste_delay_ms=self.cfg.paste.delay_ms,
             on_state_change=self._on_state_change,
             on_complete=self._on_dictation_complete,
+            on_error=self._on_pipeline_error,
+            failed_recording_path=FAILED_RECORDING_FILE,
         )
 
     def _on_hotkey_start(self):
@@ -341,12 +355,47 @@ class YapApp(rumps.App):
             daemon=True,
         ).start()
 
+    def _on_pipeline_error(self, reason: str):
+        """Called from the pipeline when a dictation fails (after returning to IDLE)."""
+        logger.warning("Pipeline error: %s", reason)
+        self.sounds.play_error()
+
+        def update():
+            self.status_item.title = "Status: Transcription failed"
+            self._refresh_retry_item_on_main()
+
+        AppKit.NSOperationQueue.mainQueue().addOperationWithBlock_(update)
+
+    def _refresh_retry_item(self):
+        AppKit.NSOperationQueue.mainQueue().addOperationWithBlock_(
+            self._refresh_retry_item_on_main
+        )
+
+    def _refresh_retry_item_on_main(self):
+        if self.pipeline.has_failed_recording:
+            self.retry_item.set_callback(self._on_retry_clicked)
+        else:
+            self.retry_item.set_callback(None)
+
+    def _on_retry_clicked(self, _):
+        """Re-run transcription for the last failed recording."""
+        logger.info("Retry of failed dictation requested from menu")
+        threading.Thread(
+            target=self.pipeline.retry_last_recording,
+            kwargs={"source": "menu_retry"},
+            daemon=True,
+        ).start()
+
     def _on_dictation_complete(self, text: str):
         """Called after a successful dictation paste — update history."""
         self._history.appendleft(text)
-        AppKit.NSOperationQueue.mainQueue().addOperationWithBlock_(
-            self._rebuild_recent_menu
-        )
+        save_history(HISTORY_FILE, list(self._history))
+
+        def update():
+            self._rebuild_recent_menu()
+            self._refresh_retry_item_on_main()
+
+        AppKit.NSOperationQueue.mainQueue().addOperationWithBlock_(update)
 
     def _rebuild_recent_menu(self):
         """Rebuild the Recent submenu from history."""

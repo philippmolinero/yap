@@ -182,6 +182,114 @@ def test_start_failure_leaves_pipeline_idle(monkeypatch):
     assert recorder.start_calls == 1
 
 
+def test_transcription_failure_stashes_recording_and_notifies(monkeypatch, tmp_path):
+    class _FailingTranscriber:
+        def transcribe(self, wav_bytes):
+            raise RuntimeError("network down")
+
+    recorder = _FakeRecorder(wav_bytes=b"failed-audio")
+    errors: list[str] = []
+    pasted: list[str] = []
+    monkeypatch.setattr(pipeline_module, "paste", lambda text, delay_ms=0: pasted.append(text))
+    failed_path = tmp_path / "last_failed_recording.wav"
+    pipeline = pipeline_module.Pipeline(
+        recorder=recorder,
+        transcriber=_FailingTranscriber(),
+        cleanup=NoopCleanup(),
+        paste_delay_ms=0,
+        on_error=errors.append,
+        failed_recording_path=failed_path,
+    )
+
+    assert pipeline.start_recording(source="hotkey_down") is True
+    assert pipeline.stop_recording_and_process(source="hotkey_up") is False
+
+    assert pipeline.state == pipeline_module.PipelineState.IDLE
+    assert errors == ["transcription_failed"]
+    assert pipeline.has_failed_recording is True
+    assert failed_path.read_bytes() == b"failed-audio"
+    assert pasted == []
+
+
+def test_retry_last_recording_processes_stashed_audio(monkeypatch, tmp_path):
+    class _FlakyTranscriber:
+        def __init__(self):
+            self.calls = 0
+
+        def transcribe(self, wav_bytes):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("network down")
+            assert wav_bytes == b"failed-audio"
+            return SimpleNamespace(text="rescued text", language="en", latency=0.01)
+
+    recorder = _FakeRecorder(wav_bytes=b"failed-audio")
+    pasted: list[str] = []
+    completed: list[str] = []
+    monkeypatch.setattr(pipeline_module, "paste", lambda text, delay_ms=0: pasted.append(text))
+    failed_path = tmp_path / "last_failed_recording.wav"
+    pipeline = pipeline_module.Pipeline(
+        recorder=recorder,
+        transcriber=_FlakyTranscriber(),
+        cleanup=NoopCleanup(),
+        paste_delay_ms=0,
+        on_complete=completed.append,
+        failed_recording_path=failed_path,
+    )
+
+    assert pipeline.start_recording(source="hotkey_down") is True
+    assert pipeline.stop_recording_and_process(source="hotkey_up") is False
+    assert pipeline.has_failed_recording is True
+
+    assert pipeline.retry_last_recording(source="menu_retry") is True
+
+    assert pasted == ["rescued text"]
+    assert completed == ["rescued text"]
+    assert pipeline.has_failed_recording is False
+    assert not failed_path.exists()
+    assert pipeline.state == pipeline_module.PipelineState.IDLE
+
+
+def test_retry_last_recording_loads_stash_from_disk(monkeypatch, tmp_path):
+    """A stashed recording survives an app restart (memory empty, file present)."""
+    pasted: list[str] = []
+    monkeypatch.setattr(pipeline_module, "paste", lambda text, delay_ms=0: pasted.append(text))
+    failed_path = tmp_path / "last_failed_recording.wav"
+    failed_path.write_bytes(b"audio-from-previous-run")
+
+    class _Transcriber:
+        def transcribe(self, wav_bytes):
+            assert wav_bytes == b"audio-from-previous-run"
+            return SimpleNamespace(text="recovered", language="en", latency=0.01)
+
+    pipeline = pipeline_module.Pipeline(
+        recorder=_FakeRecorder(),
+        transcriber=_Transcriber(),
+        cleanup=NoopCleanup(),
+        paste_delay_ms=0,
+        failed_recording_path=failed_path,
+    )
+
+    assert pipeline.has_failed_recording is True
+    assert pipeline.retry_last_recording(source="menu_retry") is True
+    assert pasted == ["recovered"]
+    assert not failed_path.exists()
+
+
+def test_retry_without_failed_recording_returns_false(monkeypatch, tmp_path):
+    pipeline = pipeline_module.Pipeline(
+        recorder=_FakeRecorder(),
+        transcriber=_FakeTranscriber(),
+        cleanup=NoopCleanup(),
+        paste_delay_ms=0,
+        failed_recording_path=tmp_path / "missing.wav",
+    )
+
+    assert pipeline.has_failed_recording is False
+    assert pipeline.retry_last_recording(source="menu_retry") is False
+    assert pipeline.state == pipeline_module.PipelineState.IDLE
+
+
 def test_silence_auto_stop_uses_abortive_recorder_stop(monkeypatch):
     recorder = _FakeRecorder()
     states: list[pipeline_module.PipelineState] = []

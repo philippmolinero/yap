@@ -18,6 +18,8 @@ Yap is a lightweight macOS menubar app for voice dictation. Hold Right Option to
 - Config: `~/.config/yap/config.toml` (user), `config/default.toml` (bundled defaults)
 - Secrets: `~/.config/yap/secrets.toml` (API keys, managed via Settings dialog)
 - Logs: `~/.config/yap/yap.log` (bundled app only, overwritten each launch)
+- History: `~/.config/yap/history.json` (persisted recent dictations)
+- Failed recording rescue: `~/.config/yap/last_failed_recording.wav` (kept for "Retry Failed Dictation" menu item after a transcription failure)
 - Env vars: `MISTRAL_API_KEY`, `GROQ_API_KEY` in `.env` (dev fallback)
 
 ## Update Workflow
@@ -29,7 +31,8 @@ Yap is a lightweight macOS menubar app for voice dictation. Hold Right Option to
 - After `--full-clean`, you must re-enter API keys in Settings
 
 ## Architecture
-- Pipeline: hotkey → recorder → transcriber (Voxtral) → cleanup (Groq) → paster (pbcopy + Cmd+V)
+- Pipeline: hotkey → recorder → transcriber (Voxtral/Groq, with retry on transient errors) → cleanup (Groq) → paster (NSPasteboard + native CGEvent Cmd+V, osascript fallback)
+- Transcription failures stash the WAV to `last_failed_recording.wav` and fire the pipeline `on_error` callback (error sound + "Retry Failed Dictation" menu item)
 - UI: rumps menubar app + frosted glass overlay (AppKit/NSVisualEffectView) + settings dialog (NSWindow)
 - Hotkeys: Quartz CGEventTap on Right Option (hold-to-talk + double-tap toggle)
 - Resources: `app/resources.py` resolves paths for both dev mode and PyInstaller bundles (`sys._MEIPASS`)
