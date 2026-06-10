@@ -44,7 +44,7 @@ class TranscriptionConfig:
 class CleanupConfig:
     enabled: bool = True
     provider: str = "groq"
-    model: str = "llama-3.3-70b-versatile"
+    model: str = "meta-llama/llama-4-scout-17b-16e-instruct"
 
 
 @dataclass
@@ -165,7 +165,7 @@ def load_config() -> AppConfig:
         if pref_provider == "mistral":
             cleanup_cfg.model = "mistral-small-latest"
         elif pref_provider == "groq":
-            cleanup_cfg.model = "llama-3.3-70b-versatile"
+            cleanup_cfg.model = "meta-llama/llama-4-scout-17b-16e-instruct"
     elif not pref_provider:
         # Smart default: no explicit preference, no Groq key, but Mistral key → use Mistral
         if not groq_key and mistral_key:

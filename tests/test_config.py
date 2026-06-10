@@ -304,7 +304,7 @@ class TestLoadConfig:
         assert cfg.transcription.fallback_languages == ["de", "en"]
         assert cfg.cleanup.enabled is True
         assert cfg.cleanup.provider == "groq"
-        assert cfg.cleanup.model == "llama-3.3-70b-versatile"
+        assert cfg.cleanup.model == "meta-llama/llama-4-scout-17b-16e-instruct"
         assert cfg.paste.delay_ms == 50
         assert cfg.silence.timeout == 5.0
         assert cfg.silence.threshold == 0.008
