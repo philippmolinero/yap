@@ -4,8 +4,8 @@ from pathlib import Path
 import sys
 
 APP_NAME = "Yap"
-APP_VERSION = "0.2.1"
-GITHUB_REPO = "philippmoeller-fr/yap"
+APP_VERSION = "0.3.0"
+GITHUB_REPO = "philippmolinero/yap"
 
 
 def normalize_version(version: str) -> str:

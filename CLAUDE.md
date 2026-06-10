@@ -79,4 +79,4 @@ Three separate permissions are required. Getting these wrong causes silent failu
 - After rebuilding, reset stale TCC: `tccutil reset ListenEvent com.yap.dictation`
 
 ## Git
-- Personal repo under `philippmoeller-fr` GitHub account
+- Personal repo: `philippmolinero/yap` (canonical for code, releases, and in-app updater). The old `philippmoeller-fr/yap` repo is stale — do not push or release there.
