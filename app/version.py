@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 
 APP_NAME = "Yap"
-APP_VERSION = "0.2.1"
+APP_VERSION = "0.3.0"
 GITHUB_REPO = "philippmolinero/yap"
 
 
