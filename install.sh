@@ -4,7 +4,6 @@ set -e
 APP_DIR="$(cd "$(dirname "$0")" && pwd)"
 VENV_DIR="$APP_DIR/.venv"
 CONFIG_DIR="$HOME/.config/yap"
-OLD_CONFIG_DIR="$HOME/.config/voxtral-dictation"
 PLIST_NAME="com.yap-dictation"
 PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_NAME}.plist"
 
@@ -24,13 +23,7 @@ echo "Installing dependencies..."
 "$VENV_DIR/bin/pip" install -q --upgrade pip
 "$VENV_DIR/bin/pip" install -q -r "$APP_DIR/requirements.txt"
 
-# 3. Migrate old config directory if needed
-if [ -d "$OLD_CONFIG_DIR" ] && [ ! -d "$CONFIG_DIR" ]; then
-    echo "Migrating config from $OLD_CONFIG_DIR to $CONFIG_DIR..."
-    mv "$OLD_CONFIG_DIR" "$CONFIG_DIR"
-fi
-
-# 4. Set up config directory
+# 3. Set up config directory
 mkdir -p "$CONFIG_DIR"
 
 if [ ! -f "$CONFIG_DIR/config.toml" ]; then

@@ -30,11 +30,6 @@ class TestConfigDirPaths:
         assert CONFIG_DIR.name == "yap"
         assert str(CONFIG_DIR).endswith(".config/yap")
 
-    def test_old_config_dir_is_voxtral(self):
-        from app.config import _OLD_CONFIG_DIR
-
-        assert _OLD_CONFIG_DIR.name == "voxtral-dictation"
-
     def test_secrets_file_in_config_dir(self):
         from app.config import CONFIG_DIR, SECRETS_FILE
 

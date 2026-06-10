@@ -72,7 +72,7 @@ permissions again after each rebuild.
 ```
 
 Also does:
-- Removes `~/.config/yap` and legacy `~/.config/voxtral-dictation`
+- Removes `~/.config/yap`
 - Removes `~/.config/yap.backup.*`
 - Resets TCC for `com.yap.dictation` (best effort)
 
