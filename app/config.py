@@ -142,9 +142,6 @@ def load_config() -> AppConfig:
     mistral_key = secrets.get("mistral", "") or os.environ.get("MISTRAL_API_KEY", "")
     groq_key = secrets.get("groq", "") or os.environ.get("GROQ_API_KEY", "")
 
-    if "provider" not in trans_raw and str(trans_raw.get("model", "")).startswith("voxtral-"):
-        trans_raw["provider"] = "mistral"
-
     cleanup_cfg = CleanupConfig(**cleanup_raw)
 
     # Apply explicit preference from secrets.toml
