@@ -13,7 +13,6 @@ from app.resources import get_resource_path
 
 logger = logging.getLogger(__name__)
 
-_OLD_CONFIG_DIR = Path.home() / ".config" / "voxtral-dictation"
 CONFIG_DIR = Path.home() / ".config" / "yap"
 CONFIG_FILE = CONFIG_DIR / "config.toml"
 VOCAB_FILE = CONFIG_DIR / "vocabulary.txt"
@@ -70,16 +69,8 @@ class AppConfig:
     groq_api_key: str = ""
 
 
-def _migrate_config_dir():
-    """Migrate from old ~/.config/voxtral-dictation/ to ~/.config/yap/."""
-    if _OLD_CONFIG_DIR.exists() and not CONFIG_DIR.exists():
-        logger.info("Migrating config dir: %s -> %s", _OLD_CONFIG_DIR, CONFIG_DIR)
-        shutil.move(str(_OLD_CONFIG_DIR), str(CONFIG_DIR))
-
-
 def _ensure_config_dir():
     """Create config dir and copy defaults on first run."""
-    _migrate_config_dir()
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
     if not CONFIG_FILE.exists() and _BUNDLED_CONFIG.exists():

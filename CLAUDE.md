@@ -5,7 +5,7 @@ Yap is a lightweight macOS menubar app for voice dictation. Hold Right Option to
 
 ## Naming
 - Project directory: `yap/`
-- Config directory: `~/.config/yap/` (migrated from `~/.config/voxtral-dictation/`)
+- Config directory: `~/.config/yap/`
 
 ## Quick Reference
 - Run: `python3 -m app.main` from project root (dev), or `open dist/Yap.app` (bundled)

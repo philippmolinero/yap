@@ -17,62 +17,6 @@ def config_dir(tmp_path):
     return d
 
 
-@pytest.fixture
-def old_config_dir(tmp_path):
-    """Create a temporary old config directory with files."""
-    d = tmp_path / "voxtral-dictation"
-    d.mkdir()
-    (d / "config.toml").write_text("[hotkey]\nkeycode = 61\n")
-    (d / "vocabulary.txt").write_text("Claude Code\nAnthopic\n")
-    return d
-
-
-class TestMigrateConfigDir:
-    """Config directory migration from voxtral-dictation to yap."""
-
-    def test_migrates_when_old_exists_and_new_does_not(self, tmp_path, old_config_dir):
-        new_dir = tmp_path / "yap"
-        assert not new_dir.exists()
-
-        with mock.patch("app.config._OLD_CONFIG_DIR", old_config_dir), \
-             mock.patch("app.config.CONFIG_DIR", new_dir):
-            from app.config import _migrate_config_dir
-
-            _migrate_config_dir()
-
-        assert new_dir.exists()
-        assert (new_dir / "config.toml").exists()
-        assert (new_dir / "vocabulary.txt").exists()
-        assert not old_config_dir.exists()
-
-    def test_no_migration_when_new_exists(self, tmp_path, old_config_dir):
-        new_dir = tmp_path / "yap"
-        new_dir.mkdir()
-        (new_dir / "config.toml").write_text("[hotkey]\nkeycode = 99\n")
-
-        with mock.patch("app.config._OLD_CONFIG_DIR", old_config_dir), \
-             mock.patch("app.config.CONFIG_DIR", new_dir):
-            from app.config import _migrate_config_dir
-
-            _migrate_config_dir()
-
-        # New dir untouched, old dir still exists
-        assert (new_dir / "config.toml").read_text() == "[hotkey]\nkeycode = 99\n"
-        assert old_config_dir.exists()
-
-    def test_no_migration_when_old_does_not_exist(self, tmp_path):
-        old_dir = tmp_path / "voxtral-dictation"
-        new_dir = tmp_path / "yap"
-
-        with mock.patch("app.config._OLD_CONFIG_DIR", old_dir), \
-             mock.patch("app.config.CONFIG_DIR", new_dir):
-            from app.config import _migrate_config_dir
-
-            _migrate_config_dir()
-
-        assert not new_dir.exists()
-
-
 class TestSecrets:
     """Secrets loading and saving."""
 
@@ -341,8 +285,7 @@ class TestEnsureConfigDir:
         config_file = config_dir / "config.toml"
         vocab_file = config_dir / "vocabulary.txt"
 
-        with mock.patch("app.config._OLD_CONFIG_DIR", tmp_path / "nonexistent"), \
-             mock.patch("app.config.CONFIG_DIR", config_dir), \
+        with mock.patch("app.config.CONFIG_DIR", config_dir), \
              mock.patch("app.config.CONFIG_FILE", config_file), \
              mock.patch("app.config.VOCAB_FILE", vocab_file):
             from app.config import _ensure_config_dir
@@ -359,8 +302,7 @@ class TestEnsureConfigDir:
         config_file = config_dir / "config.toml"
         config_file.write_text("custom content")
 
-        with mock.patch("app.config._OLD_CONFIG_DIR", tmp_path / "nonexistent"), \
-             mock.patch("app.config.CONFIG_DIR", config_dir), \
+        with mock.patch("app.config.CONFIG_DIR", config_dir), \
              mock.patch("app.config.CONFIG_FILE", config_file), \
              mock.patch("app.config.VOCAB_FILE", config_dir / "vocabulary.txt"):
             from app.config import _ensure_config_dir

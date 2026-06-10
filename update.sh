@@ -74,7 +74,7 @@ rm -rf "$APP_DEST"
 
 if [[ "$FULL_CLEAN" -eq 1 ]]; then
     echo "Running full clean..."
-    rm -rf "$HOME/.config/yap" "$HOME/.config/voxtral-dictation"
+    rm -rf "$HOME/.config/yap"
     rm -rf "$HOME/.config"/yap.backup.* 2>/dev/null || true
     tccutil reset All com.yap.dictation 2>/dev/null || true
 fi
