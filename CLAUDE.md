@@ -53,7 +53,7 @@ Three separate permissions are required. Getting these wrong causes silent failu
 - **`CGEventTapCreate` returns non-None even without permission** — events just silently never arrive. Always check `CGPreflightListenEventAccess()` first.
 - **`ApplicationServices` module not bundled by PyInstaller** — access functions through `Quartz` or `ctypes` instead.
 - **Terminal inherits permissions**: Running from Terminal works because Terminal has its own Input Monitoring grant. Finder-launched apps need their own.
-- **TCC entries go stale on rebuild**: Ad-hoc signed PyInstaller apps get new signatures each build. Fix: `tccutil reset ListenEvent com.yap.dictation`.
+- **TCC entries go stale on rebuild** only for ad-hoc signatures. Builds are signed with the self-signed "Yap Local Codesign" keychain identity (build.sh auto-detects it; cert PEM kept at `~/.config/yap/yap-codesign-cert.pem`), so permissions persist across rebuilds. If the identity is missing on a new machine, recreate it (self-signed cert with codeSigning EKU, trust via `security add-trusted-cert -p codeSign`) or grants reset every build; stale entries can be cleared with `tccutil reset ListenEvent com.yap.dictation`.
 - **`com.apple.provenance` is immutable on macOS 26**: `xattr -cr` cannot remove it. Don't waste time trying.
 - **Event tap timeout**: macOS disables slow taps. Handle `kCGEventTapDisabledByTimeout` in callback and re-enable.
 - The app polls `CGPreflightListenEventAccess()` every 2s so it auto-activates after the user grants Input Monitoring — no relaunch needed.

@@ -19,7 +19,7 @@ echo "Building Yap.app with PyInstaller..."
 pyinstaller yap.spec --noconfirm
 
 if [[ -z "${YAP_CODESIGN_IDENTITY:-}" ]]; then
-    YAP_CODESIGN_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | awk -F '"' '/Developer ID Application|Apple Development/ { print $2; exit }')"
+    YAP_CODESIGN_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | awk -F '"' '/Developer ID Application|Apple Development|Yap Local Codesign/ { print $2; exit }')"
 fi
 
 if [[ -n "${YAP_CODESIGN_IDENTITY:-}" ]]; then
