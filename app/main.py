@@ -23,7 +23,7 @@ from app.recorder import Recorder
 from app.resources import get_resource_path
 from app.settings_dialog import SettingsDialog
 from app.sounds import SoundFeedback
-from app.transcriber import create_transcriber
+from app.transcriber import UnconfiguredTranscriber, create_transcriber
 from app.updater import UpdateInfo, UpdateManager
 from app.version import APP_NAME, APP_VERSION, bundled_app_path
 
@@ -135,6 +135,8 @@ class YapApp(rumps.App):
         # Build pipeline components
         self._audio_recovery_pending = False
         self._audio_recovery_started = False
+        self._pipeline_ready = False
+        self._pipeline_missing_reason = ""
         self._build_pipeline()
 
         # Overlay — waveform pulls audio level directly from recorder
@@ -177,6 +179,8 @@ class YapApp(rumps.App):
             None,
             rumps.MenuItem("Quit", callback=self._quit),
         ]
+        if not self._pipeline_ready:
+            self.status_item.title = "Status: Missing API Key"
         self._refresh_update_item()
         self._rebuild_recent_menu()
         self._refresh_retry_item()
@@ -200,7 +204,10 @@ class YapApp(rumps.App):
             vocabulary=self.cfg.vocabulary,
             allowed_languages=self.cfg.transcription.allowed_languages,
             fallback_languages=self.cfg.transcription.fallback_languages,
+            allow_unconfigured=True,
         )
+        self._pipeline_ready = not isinstance(transcriber, UnconfiguredTranscriber)
+        self._pipeline_missing_reason = getattr(transcriber, "reason", "")
         cleanup_key = {"groq": self.cfg.groq_api_key, "mistral": self.cfg.mistral_api_key}.get(
             self.cfg.cleanup.provider, ""
         )
@@ -224,6 +231,12 @@ class YapApp(rumps.App):
 
     def _on_hotkey_start(self):
         # Already running in a daemon thread (dispatched from HotkeyManager._handle_down)
+        if not self._pipeline_ready:
+            logger.warning("Dictation blocked: %s", self._pipeline_missing_reason)
+            AppKit.NSOperationQueue.mainQueue().addOperationWithBlock_(
+                lambda: self._open_settings(None)
+            )
+            return
         self.pipeline.start_recording(source="hotkey_down")
 
     def _on_hotkey_stop(self):
@@ -239,7 +252,10 @@ class YapApp(rumps.App):
         status_text = f"Status: {state.value.capitalize()}"
 
         def update():
-            self.status_item.title = status_text
+            if state == PipelineState.IDLE and not self._pipeline_ready:
+                self.status_item.title = "Status: Missing API Key"
+            else:
+                self.status_item.title = status_text
             if state == PipelineState.RECORDING:
                 self.stop_item.set_callback(self._on_stop_clicked)
                 self.overlay.show(OverlayState.RECORDING)
@@ -600,6 +616,10 @@ class YapApp(rumps.App):
         self.cfg = load_config()
         self._build_pipeline()
         self.overlay.set_level_provider(lambda: self.recorder.audio_level)
+        if self._pipeline_ready:
+            self.status_item.title = "Status: Idle"
+        else:
+            self.status_item.title = "Status: Missing API Key"
 
     def _open_config(self, _):
         subprocess.Popen(["open", str(CONFIG_FILE)])
@@ -626,11 +646,7 @@ class YapApp(rumps.App):
             ).start()
 
         # Check for missing API keys after startup — auto-open settings
-        missing_transcription_key = (
-            self.cfg.transcription.provider == "groq" and not self.cfg.groq_api_key
-        ) or (
-            self.cfg.transcription.provider != "groq" and not self.cfg.mistral_api_key
-        )
+        missing_transcription_key = not self._pipeline_ready
         missing_cleanup_key = (
             self.cfg.cleanup.enabled
             and self.cfg.cleanup.provider == "groq"

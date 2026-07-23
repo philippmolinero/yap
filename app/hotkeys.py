@@ -325,7 +325,7 @@ class HotkeyManager:
 
         if self._tap is None:
             logger.error("Failed to create event tap")
-            self._show_permission_alert()
+            self._show_permission_alert_once()
             return
 
         run_loop_source = Quartz.CFMachPortCreateRunLoopSource(None, self._tap, 0)

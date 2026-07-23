@@ -6,6 +6,9 @@ groq
 httpx
 rumps
 python-dotenv
-pyobjc-framework-Quartz
-pyobjc-framework-Cocoa
+pyobjc-core<12
+pyobjc-framework-Quartz<12
+pyobjc-framework-Cocoa<12
 pyinstaller
+Pillow
+pytest
