@@ -7,8 +7,10 @@ import app.transcriber as transcriber_module
 from app.transcriber import (
     GroqTranscriber,
     TranscriptionResult,
+    UnconfiguredTranscriber,
     _post_with_retry,
     contains_cjk,
+    create_transcriber,
     normalize_language,
 )
 
@@ -51,6 +53,19 @@ def test_groq_language_guard_rejects_cjk_even_when_language_is_missing():
     assert transcriber._is_allowed_result(
         TranscriptionResult(text="これはテストです", language="", latency=0.1)
     ) is False
+
+
+def test_create_transcriber_stays_strict_by_default_without_key():
+    with pytest.raises(ValueError, match="GROQ_API_KEY"):
+        create_transcriber(provider="groq")
+
+
+def test_create_transcriber_can_return_unconfigured_placeholder_without_key():
+    transcriber = create_transcriber(provider="groq", allow_unconfigured=True)
+
+    assert isinstance(transcriber, UnconfiguredTranscriber)
+    with pytest.raises(RuntimeError, match="GROQ_API_KEY"):
+        transcriber.transcribe(b"wav")
 
 
 class _FakeResponse:

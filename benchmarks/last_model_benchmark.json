@@ -1,0 +1,165 @@
+{
+  "created_at": "2026-06-10T12:16:26+0700",
+  "results": [
+    {
+      "stage": "cleanup",
+      "provider": "groq",
+      "model": "meta-llama/llama-4-scout-17b-16e-instruct",
+      "sample_id": "en_technical",
+      "language": "en",
+      "latency_s": 0.4068487079930492,
+      "output": "I think we should use Claude Code for this project because it understands the repository context and the AGENTS file very well.",
+      "error": ""
+    },
+    {
+      "stage": "cleanup",
+      "provider": "groq",
+      "model": "meta-llama/llama-4-scout-17b-16e-instruct",
+      "sample_id": "en_casual",
+      "language": "en",
+      "latency_s": 0.34921549999853596,
+      "output": "Can you move the meeting to three PM tomorrow and send me the updated notes?",
+      "error": ""
+    },
+    {
+      "stage": "cleanup",
+      "provider": "groq",
+      "model": "meta-llama/llama-4-scout-17b-16e-instruct",
+      "sample_id": "de_technical",
+      "language": "de",
+      "latency_s": 0.34403454199491534,
+      "output": "Ich denke, wir sollten die API-Schnittstelle neu gestalten, weil die aktuelle Version bessere Fehlerbehandlung braucht.",
+      "error": ""
+    },
+    {
+      "stage": "cleanup",
+      "provider": "groq",
+      "model": "meta-llama/llama-4-scout-17b-16e-instruct",
+      "sample_id": "de_casual",
+      "language": "de",
+      "latency_s": 0.3782247499912046,
+      "output": "Kannst du den Termin auf morgen um zehn Uhr verschieben?",
+      "error": ""
+    },
+    {
+      "stage": "cleanup",
+      "provider": "groq",
+      "model": "openai/gpt-oss-20b",
+      "sample_id": "en_technical",
+      "language": "en",
+      "latency_s": 1.245643290996668,
+      "output": "So I think we should use Claude Code for this project because it understands the repository context and the AGENTS file very well.",
+      "error": ""
+    },
+    {
+      "stage": "cleanup",
+      "provider": "groq",
+      "model": "openai/gpt-oss-20b",
+      "sample_id": "en_casual",
+      "language": "en",
+      "latency_s": 0.8020492920040851,
+      "output": "Can you move the meeting to three PM tomorrow and send me the updated notes.",
+      "error": ""
+    },
+    {
+      "stage": "cleanup",
+      "provider": "groq",
+      "model": "openai/gpt-oss-20b",
+      "sample_id": "de_technical",
+      "language": "de",
+      "latency_s": 2.1761906250030734,
+      "output": "Ich denke wir sollten die API Schnittstelle neu gestalten, weil die aktuelle Version bessere Fehlerbehandlung braucht.",
+      "error": ""
+    },
+    {
+      "stage": "cleanup",
+      "provider": "groq",
+      "model": "openai/gpt-oss-20b",
+      "sample_id": "de_casual",
+      "language": "de",
+      "latency_s": 5.794301041998551,
+      "output": "Kannst du den Termin auf morgen um zehn Uhr verschieben?",
+      "error": ""
+    },
+    {
+      "stage": "cleanup",
+      "provider": "groq",
+      "model": "llama-3.1-8b-instant",
+      "sample_id": "en_technical",
+      "language": "en",
+      "latency_s": 0.39697266700386535,
+      "output": "<transcript>\nSo I think we should use Claude Code for this project because it understands the repository context and the AGENTS file very well.\n</transcript>",
+      "error": ""
+    },
+    {
+      "stage": "cleanup",
+      "provider": "groq",
+      "model": "llama-3.1-8b-instant",
+      "sample_id": "en_casual",
+      "language": "en",
+      "latency_s": 0.3319069999997737,
+      "output": "can you move the meeting to three PM tomorrow and send me the updated notes?",
+      "error": ""
+    },
+    {
+      "stage": "cleanup",
+      "provider": "groq",
+      "model": "llama-3.1-8b-instant",
+      "sample_id": "de_technical",
+      "language": "de",
+      "latency_s": 14.564040042008855,
+      "output": "<transcript>\nIch denke wir sollten die API Schnittstelle neu gestalten weil die aktuelle Version bessere Fehlerbehandlung braucht\n</transcript>",
+      "error": ""
+    },
+    {
+      "stage": "cleanup",
+      "provider": "groq",
+      "model": "llama-3.1-8b-instant",
+      "sample_id": "de_casual",
+      "language": "de",
+      "latency_s": 24.837895541000762,
+      "output": "kannst du den Termin auf morgen um zehn Uhr verschieben?",
+      "error": ""
+    },
+    {
+      "stage": "cleanup",
+      "provider": "groq",
+      "model": "llama-3.3-70b-versatile",
+      "sample_id": "en_technical",
+      "language": "en",
+      "latency_s": 0.31157595799595583,
+      "output": "I think we should use Claude Code for this project because it understands the repository context and the AGENTS file very well.",
+      "error": ""
+    },
+    {
+      "stage": "cleanup",
+      "provider": "groq",
+      "model": "llama-3.3-70b-versatile",
+      "sample_id": "en_casual",
+      "language": "en",
+      "latency_s": 0.4693063750019064,
+      "output": "Can you move the meeting to three PM tomorrow and send me the updated notes?",
+      "error": ""
+    },
+    {
+      "stage": "cleanup",
+      "provider": "groq",
+      "model": "llama-3.3-70b-versatile",
+      "sample_id": "de_technical",
+      "language": "de",
+      "latency_s": 0.6877989999920828,
+      "output": "Ich denke wir sollten die API Schnittstelle neu gestalten weil die aktuelle Version bessere Fehlerbehandlung braucht.",
+      "error": ""
+    },
+    {
+      "stage": "cleanup",
+      "provider": "groq",
+      "model": "llama-3.3-70b-versatile",
+      "sample_id": "de_casual",
+      "language": "de",
+      "latency_s": 0.46795041700534057,
+      "output": "Kannst du den Termin auf morgen um zehn Uhr verschieben?",
+      "error": ""
+    }
+  ]
+}

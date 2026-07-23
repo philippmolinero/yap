@@ -326,3 +326,13 @@ class TestHotkeyRecovery:
 
         assert mgr.start() is False
         thread_ctor.assert_not_called()
+
+    def test_run_loop_shows_alert_when_event_tap_creation_fails(self, monkeypatch):
+        mgr = hotkeys.HotkeyManager(on_start=mock.Mock(), on_stop=mock.Mock())
+        monkeypatch.setattr(mgr, "_wait_for_input_monitoring", lambda: True)
+        monkeypatch.setattr(hotkeys.Quartz, "CGEventTapCreate", lambda *args: None)
+        monkeypatch.setattr(mgr, "_show_permission_alert_once", mock.Mock())
+
+        mgr._run_loop()
+
+        mgr._show_permission_alert_once.assert_called_once()

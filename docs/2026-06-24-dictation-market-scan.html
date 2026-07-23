@@ -1,0 +1,1104 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Yap Dictation Market Scan</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #171717;
+        --muted: #66615c;
+        --paper: #fbfaf8;
+        --panel: #ffffff;
+        --line: #ded8cf;
+        --soft: #f1ece5;
+        --accent: #0f766e;
+        --accent-ink: #074843;
+        --accent-soft: #d9f0eb;
+        --gold: #9a6b08;
+        --blue: #315a8a;
+        --shadow: 0 14px 35px rgba(40, 33, 24, 0.08);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", sans-serif;
+        line-height: 1.55;
+      }
+
+      a {
+        color: var(--accent-ink);
+        text-decoration-thickness: 1px;
+        text-underline-offset: 3px;
+      }
+
+      .page {
+        min-height: 100vh;
+      }
+
+      .hero {
+        border-bottom: 1px solid var(--line);
+        background:
+          linear-gradient(135deg, rgba(217, 240, 235, 0.95), rgba(251, 250, 248, 0.82)),
+          radial-gradient(circle at 80% 15%, rgba(154, 107, 8, 0.14), transparent 34%);
+      }
+
+      .hero-inner,
+      .section,
+      .footer {
+        width: min(1180px, calc(100vw - 40px));
+        margin: 0 auto;
+      }
+
+      .hero-inner {
+        padding: 56px 0 36px;
+      }
+
+      .eyebrow {
+        margin: 0 0 14px;
+        color: var(--accent-ink);
+        font-size: 13px;
+        font-weight: 750;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      h1,
+      h2,
+      h3 {
+        margin: 0;
+        letter-spacing: 0;
+        line-height: 1.08;
+      }
+
+      h1 {
+        max-width: 850px;
+        font-size: clamp(42px, 7vw, 78px);
+      }
+
+      .hero-copy {
+        max-width: 760px;
+        margin: 22px 0 0;
+        color: #36322e;
+        font-size: 20px;
+      }
+
+      .meta-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin: 28px 0 0;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        min-height: 34px;
+        padding: 6px 12px;
+        border: 1px solid rgba(15, 118, 110, 0.28);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.62);
+        color: var(--accent-ink);
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .nav {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        border-bottom: 1px solid var(--line);
+        background: rgba(251, 250, 248, 0.92);
+        backdrop-filter: blur(14px);
+      }
+
+      .nav-inner {
+        display: flex;
+        gap: 8px;
+        width: min(1180px, calc(100vw - 40px));
+        margin: 0 auto;
+        padding: 12px 0;
+        overflow-x: auto;
+      }
+
+      .nav a {
+        flex: 0 0 auto;
+        padding: 8px 12px;
+        border-radius: 999px;
+        color: #38342f;
+        font-size: 14px;
+        font-weight: 700;
+        text-decoration: none;
+      }
+
+      .nav a:hover {
+        background: var(--soft);
+      }
+
+      .section {
+        padding: 46px 0 0;
+      }
+
+      .section-head {
+        display: grid;
+        grid-template-columns: minmax(0, 0.7fr) minmax(280px, 0.3fr);
+        gap: 30px;
+        align-items: end;
+        margin-bottom: 22px;
+      }
+
+      h2 {
+        font-size: clamp(30px, 4vw, 46px);
+      }
+
+      .section-note {
+        margin: 0;
+        color: var(--muted);
+        font-size: 15px;
+      }
+
+      .grid {
+        display: grid;
+        gap: 16px;
+      }
+
+      .grid.cols-3 {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .grid.cols-2 {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .card {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+        box-shadow: var(--shadow);
+      }
+
+      .card-pad {
+        padding: 22px;
+      }
+
+      .rank-card {
+        display: grid;
+        grid-template-columns: 44px 1fr;
+        gap: 14px;
+        min-height: 100%;
+      }
+
+      .rank {
+        display: grid;
+        place-items: center;
+        width: 38px;
+        height: 38px;
+        border-radius: 50%;
+        background: var(--accent);
+        color: #fff;
+        font-weight: 850;
+      }
+
+      .card h3 {
+        font-size: 22px;
+      }
+
+      .card p,
+      .card ul,
+      .card ol {
+        color: #393530;
+      }
+
+      .card p:last-child,
+      .card ul:last-child,
+      .card ol:last-child {
+        margin-bottom: 0;
+      }
+
+      .subtle {
+        color: var(--muted);
+      }
+
+      .app-card {
+        display: grid;
+        grid-template-rows: auto 1fr;
+        min-height: 100%;
+      }
+
+      .app-top {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 22px 22px 16px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .badge {
+        align-self: start;
+        padding: 5px 9px;
+        border-radius: 999px;
+        background: var(--accent-soft);
+        color: var(--accent-ink);
+        font-size: 12px;
+        font-weight: 800;
+        white-space: nowrap;
+      }
+
+      .app-body {
+        padding: 18px 22px 22px;
+      }
+
+      .link-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 12px;
+      }
+
+      .link-row a {
+        font-size: 14px;
+        font-weight: 700;
+      }
+
+      .split {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 14px;
+        margin-top: 16px;
+      }
+
+      .mini {
+        padding: 14px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fdfcfb;
+      }
+
+      .mini strong {
+        display: block;
+        margin-bottom: 6px;
+      }
+
+      .mini ul {
+        margin: 0;
+        padding-left: 18px;
+      }
+
+      .table-wrap {
+        overflow-x: auto;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel);
+        box-shadow: var(--shadow);
+      }
+
+      table {
+        width: 100%;
+        min-width: 980px;
+        border-collapse: collapse;
+      }
+
+      th,
+      td {
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+        vertical-align: top;
+        font-size: 14px;
+      }
+
+      th {
+        background: #eee8df;
+        color: #2d2925;
+        font-size: 12px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
+      tr:last-child td {
+        border-bottom: 0;
+      }
+
+      .callout {
+        padding: 24px;
+        border: 1px solid rgba(154, 107, 8, 0.28);
+        border-radius: 8px;
+        background: #fff8e8;
+      }
+
+      .callout h3 {
+        color: var(--gold);
+      }
+
+      .number-list {
+        display: grid;
+        gap: 12px;
+        padding: 0;
+        margin: 0;
+        list-style: none;
+      }
+
+      .number-list li {
+        display: grid;
+        grid-template-columns: 34px 1fr;
+        gap: 12px;
+        align-items: start;
+      }
+
+      .num {
+        display: grid;
+        place-items: center;
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        background: #e6f2f0;
+        color: var(--accent-ink);
+        font-size: 13px;
+        font-weight: 850;
+      }
+
+      .benchmark {
+        display: grid;
+        grid-template-columns: minmax(0, 0.85fr) minmax(280px, 0.15fr);
+        gap: 16px;
+      }
+
+      .tag-cloud {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .tag {
+        padding: 7px 10px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: #fff;
+        color: #3d3934;
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .sources {
+        columns: 2;
+        column-gap: 34px;
+        padding-left: 18px;
+      }
+
+      .sources li {
+        break-inside: avoid;
+        margin: 0 0 10px;
+      }
+
+      .footer {
+        padding: 40px 0 52px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      @media (max-width: 880px) {
+        .section-head,
+        .grid.cols-3,
+        .grid.cols-2,
+        .split,
+        .benchmark {
+          grid-template-columns: 1fr;
+        }
+
+        .hero-inner,
+        .section,
+        .footer,
+        .nav-inner {
+          width: min(100vw - 28px, 1180px);
+        }
+
+        .hero-inner {
+          padding-top: 40px;
+        }
+
+        .sources {
+          columns: 1;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <header class="hero">
+        <div class="hero-inner">
+          <p class="eyebrow">Yap product research · 2026-06-24</p>
+          <h1>Dictation market scan</h1>
+          <p class="hero-copy">
+            A product-focused read on the current dictation market: which apps
+            should guide Yap, what to borrow, and where Yap can stay sharper by
+            remaining tiny, fast, and Mac-native.
+          </p>
+          <div class="meta-row">
+            <span class="pill">North stars: 6</span>
+            <span class="pill">Watchlist: 2</span>
+            <span class="pill">Recommended Yap bets: 5</span>
+            <span class="pill">Static HTML artifact</span>
+          </div>
+        </div>
+      </header>
+
+      <nav class="nav" aria-label="Report navigation">
+        <div class="nav-inner">
+          <a href="#take">Executive take</a>
+          <a href="#apps">North-star apps</a>
+          <a href="#matrix">Matrix</a>
+          <a href="#bets">Yap bets</a>
+          <a href="#benchmark">Benchmark</a>
+          <a href="#sources">Sources</a>
+        </div>
+      </nav>
+
+      <section class="section" id="take">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Executive take</p>
+            <h2>The market is moving from speech-to-text to voice as a writing layer.</h2>
+          </div>
+          <p class="section-note">
+            Yap sits closest to instant Mac push-to-talk, but the leading apps
+            are training users to expect cleanup, personalization, privacy
+            clarity, and workflow awareness.
+          </p>
+        </div>
+
+        <div class="grid cols-3">
+          <article class="card card-pad rank-card">
+            <div class="rank">1</div>
+            <div>
+              <h3>Wispr Flow</h3>
+              <p>Category ambition, cross-app polish, dictionary/snippets, and enterprise trust.</p>
+            </div>
+          </article>
+          <article class="card card-pad rank-card">
+            <div class="rank">2</div>
+            <div>
+              <h3>Aqua Voice</h3>
+              <p>Real-time mode, contextual awareness, fast-feeling output, and AI-native positioning.</p>
+            </div>
+          </article>
+          <article class="card card-pad rank-card">
+            <div class="rank">3</div>
+            <div>
+              <h3>BetterDictation</h3>
+              <p>The closest tactical reference for Yap: Mac-only, push-to-talk, local-first, low friction.</p>
+            </div>
+          </article>
+          <article class="card card-pad rank-card">
+            <div class="rank">4</div>
+            <div>
+              <h3>Superwhisper</h3>
+              <p>Power-user depth: model choice, custom prompts, BYO API keys, and coding workflows.</p>
+            </div>
+          </article>
+          <article class="card card-pad rank-card">
+            <div class="rank">5</div>
+            <div>
+              <h3>Dragon/Nuance</h3>
+              <p>Mature professional expectations: custom vocabularies, correction loops, commands, verticals.</p>
+            </div>
+          </article>
+          <article class="card card-pad rank-card">
+            <div class="rank">6</div>
+            <div>
+              <h3>Otter.ai</h3>
+              <p>An adjacent reference for capture, summarize, search, replay, and recall workflows.</p>
+            </div>
+          </article>
+        </div>
+
+        <div class="section">
+          <div class="callout">
+            <h3>Core thesis</h3>
+            <p>
+              Yap should not try to match every surface area. The best wedge is
+              still a tiny, Mac-native, always-ready dictation tool that feels
+              faster and calmer than heavier AI voice apps.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Market pattern</p>
+            <h2>Five expectations are becoming table stakes.</h2>
+          </div>
+          <p class="section-note">
+            The strategic filter for Yap: does a feature improve the
+            hold-release-paste moment, or does it add visible weight?
+          </p>
+        </div>
+
+        <div class="grid cols-3">
+          <article class="card card-pad">
+            <h3>Any-app dictation</h3>
+            <p>Voice input into the active field without forcing users into a separate editor.</p>
+          </article>
+          <article class="card card-pad">
+            <h3>Messy speech cleanup</h3>
+            <p>Filler removal, punctuation, grammar, formatting, and intent-preserving rewrite.</p>
+          </article>
+          <article class="card card-pad">
+            <h3>Personalization</h3>
+            <p>Custom dictionaries, snippets, vocabulary learning, and style instructions.</p>
+          </article>
+          <article class="card card-pad">
+            <h3>Privacy and trust</h3>
+            <p>Local models, privacy modes, zero-data-retention claims, and compliance posture.</p>
+          </article>
+          <article class="card card-pad">
+            <h3>Workflow expansion</h3>
+            <p>Meetings, file transcription, commands, summaries, coding prompts, and team dictionaries.</p>
+          </article>
+          <article class="card card-pad">
+            <h3>Yap filter</h3>
+            <p>Anything that adds configuration weight must pay rent by improving the core loop.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section" id="apps">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">North-star apps</p>
+            <h2>What to borrow, what to ignore.</h2>
+          </div>
+          <p class="section-note">
+            These are product references, not feature checklists. The useful
+            question is where each app raises user expectations.
+          </p>
+        </div>
+
+        <div class="grid cols-2">
+          <article class="card app-card">
+            <div class="app-top">
+              <div>
+                <h3>Wispr Flow</h3>
+                <p class="subtle">Category leader for voice replacing typing.</p>
+              </div>
+              <span class="badge">Category</span>
+            </div>
+            <div class="app-body">
+              <p>
+                Available across Mac, Windows, iPhone, and Android. Strong on
+                auto edits, custom dictionary, snippets, command mode, team
+                controls, privacy mode, and compliance positioning.
+              </p>
+              <p><strong>Pricing signal:</strong> Basic free with weekly word limits; Pro at $12/user/month billed annually or $15/user/month monthly; Enterprise custom.</p>
+              <div class="split">
+                <div class="mini">
+                  <strong>Borrow</strong>
+                  <ul>
+                    <li>Before/after cleanup examples.</li>
+                    <li>Dictionary and snippets as first-class features.</li>
+                    <li>Clear trust language in Settings.</li>
+                  </ul>
+                </div>
+                <div class="mini">
+                  <strong>Avoid</strong>
+                  <ul>
+                    <li>Broad team-product sprawl too early.</li>
+                    <li>Letting command mode distract from instant dictation.</li>
+                  </ul>
+                </div>
+              </div>
+              <div class="link-row">
+                <a href="https://wisprflow.ai/">Homepage</a>
+                <a href="https://wisprflow.ai/pricing">Pricing</a>
+                <a href="https://wisprflow.ai/privacy">Privacy</a>
+              </div>
+            </div>
+          </article>
+
+          <article class="card app-card">
+            <div class="app-top">
+              <div>
+                <h3>Aqua Voice</h3>
+                <p class="subtle">Real-time AI dictation and context-aware writing.</p>
+              </div>
+              <span class="badge">Interaction</span>
+            </div>
+            <div class="app-body">
+              <p>
+                Strong reference for fast-feeling output, real-time mode,
+                custom instructions, large custom dictionaries, and coding/LLM
+                workflows.
+              </p>
+              <p><strong>Pricing signal:</strong> Starter free; Pro $8/month billed annually; Team $12/month billed annually; Enterprise custom.</p>
+              <div class="split">
+                <div class="mini">
+                  <strong>Borrow</strong>
+                  <ul>
+                    <li>Real-time trust signals.</li>
+                    <li>Compact custom instructions.</li>
+                    <li>Context-aware output for coding and support.</li>
+                  </ul>
+                </div>
+                <div class="mini">
+                  <strong>Avoid</strong>
+                  <ul>
+                    <li>Screen/app context without explicit privacy controls.</li>
+                    <li>Permission-heavy onboarding unless the payoff is clear.</li>
+                  </ul>
+                </div>
+              </div>
+              <div class="link-row">
+                <a href="https://aquavoice.com/">Homepage</a>
+                <a href="https://aquavoice.com/#pricing">Pricing</a>
+              </div>
+            </div>
+          </article>
+
+          <article class="card app-card">
+            <div class="app-top">
+              <div>
+                <h3>Superwhisper</h3>
+                <p class="subtle">Power-user model and prompt control.</p>
+              </div>
+              <span class="badge">Power users</span>
+            </div>
+            <div class="app-body">
+              <p>
+                Works in any app, includes meeting recording and transcription,
+                supports 100+ languages, offers custom prompt control, BYO API
+                keys, local/cloud models, translation, and file transcription.
+              </p>
+              <p><strong>Pricing signal:</strong> Free tier; Pro displayed at $8.49/month; Enterprise custom.</p>
+              <div class="split">
+                <div class="mini">
+                  <strong>Borrow</strong>
+                  <ul>
+                    <li>Advanced prompt control tucked away.</li>
+                    <li>BYO model/API option for technical users.</li>
+                    <li>Audio/video transcription as an adjacent feature.</li>
+                  </ul>
+                </div>
+                <div class="mini">
+                  <strong>Avoid</strong>
+                  <ul>
+                    <li>Turning Yap into a visible model workbench.</li>
+                    <li>Letting advanced knobs leak into the core UI.</li>
+                  </ul>
+                </div>
+              </div>
+              <div class="link-row">
+                <a href="https://superwhisper.com/">Homepage</a>
+              </div>
+            </div>
+          </article>
+
+          <article class="card app-card">
+            <div class="app-top">
+              <div>
+                <h3>BetterDictation</h3>
+                <p class="subtle">Closest direct Yap-like Mac product.</p>
+              </div>
+              <span class="badge">Tactical</span>
+            </div>
+            <div class="app-body">
+              <p>
+                Mac-only, push-to-talk, system-level dictation into any app.
+                Runs Whisper on the Apple Neural Engine, offers offline basic
+                mode, and adds Pro cleanup through OpenAI.
+              </p>
+              <p><strong>Pricing signal:</strong> Basic $39 lifetime single-device; Flex $49 lifetime plus $2/month billed annually; Studio $149 lifetime plus $2/month/device.</p>
+              <div class="split">
+                <div class="mini">
+                  <strong>Borrow</strong>
+                  <ul>
+                    <li>Simple push-to-talk and toggle-to-talk modes.</li>
+                    <li>Offline/local privacy story.</li>
+                    <li>Simple pricing with lifetime option.</li>
+                  </ul>
+                </div>
+                <div class="mini">
+                  <strong>Avoid</strong>
+                  <ul>
+                    <li>Apple Silicon-only constraint unless performance demands it.</li>
+                    <li>Underselling cleanup as a product surface.</li>
+                  </ul>
+                </div>
+              </div>
+              <div class="link-row">
+                <a href="https://www.betterdictation.com/">Homepage</a>
+              </div>
+            </div>
+          </article>
+
+          <article class="card app-card">
+            <div class="app-top">
+              <div>
+                <h3>Dragon / Nuance</h3>
+                <p class="subtle">Professional dictation maturity.</p>
+              </div>
+              <span class="badge">Legacy pro</span>
+            </div>
+            <div class="app-body">
+              <p>
+                The classic benchmark for accuracy expectations, custom
+                vocabulary, correction/training loops, command vocabularies, and
+                specialized domains like legal and medical.
+              </p>
+              <div class="split">
+                <div class="mini">
+                  <strong>Borrow</strong>
+                  <ul>
+                    <li>User-specific vocabulary and correction loops.</li>
+                    <li>Visible vocabulary management.</li>
+                    <li>Domain presets later.</li>
+                  </ul>
+                </div>
+                <div class="mini">
+                  <strong>Avoid</strong>
+                  <ul>
+                    <li>Heavyweight training UI.</li>
+                    <li>Enterprise ceremony in the consumer app.</li>
+                  </ul>
+                </div>
+              </div>
+              <div class="link-row">
+                <a href="https://dragon.nuance.com/en-us/home-professional-and-consumer">Nuance Dragon</a>
+                <a href="https://www.techradar.com/best/dictation-software">Market coverage</a>
+              </div>
+            </div>
+          </article>
+
+          <article class="card app-card">
+            <div class="app-top">
+              <div>
+                <h3>Otter.ai</h3>
+                <p class="subtle">Capture, summarize, search, and recall.</p>
+              </div>
+              <span class="badge">Adjacent</span>
+            </div>
+            <div class="app-body">
+              <p>
+                Not a direct Yap competitor, but useful for thinking about
+                history as a knowledge surface: live transcription, speaker ID,
+                playback, search, imports, storage, templates, and integrations.
+              </p>
+              <p><strong>Pricing signal:</strong> Basic lists 300 monthly transcription minutes; Pro lists 1,200 in-app recording minutes; Business expands meetings, imports, admin, and concurrency.</p>
+              <div class="split">
+                <div class="mini">
+                  <strong>Borrow</strong>
+                  <ul>
+                    <li>Searchable history.</li>
+                    <li>Replay/export paths.</li>
+                    <li>Summary as future history feature.</li>
+                  </ul>
+                </div>
+                <div class="mini">
+                  <strong>Avoid</strong>
+                  <ul>
+                    <li>Meeting assistant sprawl.</li>
+                    <li>Changing Yap from personal input to meeting bot.</li>
+                  </ul>
+                </div>
+              </div>
+              <div class="link-row">
+                <a href="https://otter.ai/pricing">Pricing</a>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Watchlist</p>
+            <h2>Signals worth monitoring.</h2>
+          </div>
+          <p class="section-note">
+            These are not the immediate north stars, but they signal where user
+            expectations may move next.
+          </p>
+        </div>
+
+        <div class="grid cols-2">
+          <article class="card card-pad">
+            <h3>Google AI Edge Eloquent</h3>
+            <p>
+              Reported in April 2026 as a free iOS offline dictation app from
+              Google. The important signal is on-device cleanup: filler removal,
+              real-time refinement, dictionaries, and optional Gemini-powered
+              online edits.
+            </p>
+            <p><strong>Implication:</strong> local-first cleanup may become table stakes for privacy-conscious users.</p>
+            <div class="link-row">
+              <a href="https://www.tomsguide.com/ai/google-just-launched-a-free-ai-dictation-app-that-fixes-your-speech-and-it-even-works-offline">Tom's Guide</a>
+              <a href="https://www.techradar.com/ai-platforms-assistants/i-tried-using-googles-new-offline-ai-dictation-app-and-polished-my-ramblings-surprisingly-well">TechRadar</a>
+            </div>
+          </article>
+
+          <article class="card card-pad">
+            <h3>MacWhisper</h3>
+            <p>
+              Known Mac transcription app built around Whisper. More relevant to
+              file transcription than universal push-to-talk dictation. The
+              official page redirected to Gumroad and was not text-readable in
+              this scan.
+            </p>
+            <p><strong>Implication:</strong> worth hands-on testing if Yap expands into file transcription.</p>
+            <div class="link-row">
+              <a href="https://www.macwhisper.com/">Homepage</a>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="section" id="matrix">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Feature matrix</p>
+            <h2>The competitive map at a glance.</h2>
+          </div>
+          <p class="section-note">
+            Pricing and features are snapshot signals from the scan date, not
+            evergreen guarantees.
+          </p>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>App</th>
+                <th>Best reference for</th>
+                <th>Platforms surfaced</th>
+                <th>Pricing signal</th>
+                <th>Key features to study</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>Wispr Flow</strong></td>
+                <td>Category leader and polished universal voice input</td>
+                <td>Mac, Windows, iPhone, Android</td>
+                <td>Free + Pro $12/month billed annually or $15/month</td>
+                <td>Auto edits, dictionary, snippets, command mode, privacy mode, team dictionaries</td>
+              </tr>
+              <tr>
+                <td><strong>Aqua Voice</strong></td>
+                <td>Real-time AI dictation and context-aware writing</td>
+                <td>Mac, iOS</td>
+                <td>Free + Pro $8/month billed annually</td>
+                <td>Real-time mode, custom instructions, large dictionary, privacy/team controls</td>
+              </tr>
+              <tr>
+                <td><strong>Superwhisper</strong></td>
+                <td>Power-user model and prompt control</td>
+                <td>Mac, Windows, iOS</td>
+                <td>Free + Pro $8.49/month</td>
+                <td>Local/cloud models, BYO keys, custom prompts, meetings, file transcription</td>
+              </tr>
+              <tr>
+                <td><strong>BetterDictation</strong></td>
+                <td>Closest Yap-like Mac push-to-talk product</td>
+                <td>macOS Apple Silicon</td>
+                <td>$39 lifetime basic + $2/month Pro</td>
+                <td>Offline local Whisper, push/toggle modes, simple setup, Pro cleanup</td>
+              </tr>
+              <tr>
+                <td><strong>Dragon / Nuance</strong></td>
+                <td>Professional dictation maturity</td>
+                <td>Windows/pro verticals</td>
+                <td>Premium/pro pricing</td>
+                <td>Custom vocab, training/correction, commands, vertical specialization</td>
+              </tr>
+              <tr>
+                <td><strong>Otter.ai</strong></td>
+                <td>Meeting capture and recall</td>
+                <td>Web, desktop, iOS, Android</td>
+                <td>Free + Pro/Business subscriptions</td>
+                <td>Live meeting transcription, speaker ID, summaries, imports, search</td>
+              </tr>
+              <tr>
+                <td><strong>Google AI Edge Eloquent</strong></td>
+                <td>Offline real-time cleanup signal</td>
+                <td>iOS reported</td>
+                <td>Free reported</td>
+                <td>On-device cleanup, dictionaries, optional Gemini online mode</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="section" id="bets">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Yap product implications</p>
+            <h2>The near-term north star: clean words into any Mac app, fast.</h2>
+          </div>
+          <p class="section-note">
+            Prioritize features that make the core loop feel more reliable,
+            more personal, and more trustworthy.
+          </p>
+        </div>
+
+        <div class="grid cols-2">
+          <article class="card card-pad">
+            <h3>Differentiators to pursue</h3>
+            <ol class="number-list">
+              <li><span class="num">1</span><span><strong>Fast, calm Mac-native feel.</strong> Minimal chrome, subtle feedback, reliable paste into the focused field.</span></li>
+              <li><span class="num">2</span><span><strong>Transparent privacy modes.</strong> Make cloud vs local transcription and cleanup obvious.</span></li>
+              <li><span class="num">3</span><span><strong>Personal vocabulary.</strong> Names, acronyms, product terms, and project terms exposed beyond a hidden file.</span></li>
+              <li><span class="num">4</span><span><strong>Style presets.</strong> Clean dictation, short message, email reply, technical note, coding-assistant prompt.</span></li>
+              <li><span class="num">5</span><span><strong>Correction feedback loop.</strong> Use history to improve future cleanup and vocabulary.</span></li>
+            </ol>
+          </article>
+
+          <article class="card card-pad">
+            <h3>Features to defer</h3>
+            <div class="tag-cloud">
+              <span class="tag">Meeting bots</span>
+              <span class="tag">Team dashboards</span>
+              <span class="tag">Broad mobile support</span>
+              <span class="tag">Deep screen context</span>
+              <span class="tag">Heavy automation</span>
+              <span class="tag">Model-provider clutter</span>
+            </div>
+          </article>
+        </div>
+
+        <div class="section">
+          <div class="grid cols-3">
+            <article class="card card-pad">
+              <h3>Bet 1: Core loop reliability</h3>
+              <p>Show recording, silence stopping, transcribing, cleaning, pasting, and failure states clearly.</p>
+            </article>
+            <article class="card card-pad">
+              <h3>Bet 2: Vocabulary as product</h3>
+              <p>Make <code>config/vocabulary.txt</code> editable, discoverable, and useful to both transcription and cleanup.</p>
+            </article>
+            <article class="card card-pad">
+              <h3>Bet 3: Style presets first</h3>
+              <p>Offer opinionated output modes before exposing raw prompt editing.</p>
+            </article>
+            <article class="card card-pad">
+              <h3>Bet 4: Lightweight privacy</h3>
+              <p>Show where audio and text go, and eventually offer local transcription when quality is strong enough.</p>
+            </article>
+            <article class="card card-pad">
+              <h3>Bet 5: History as correction</h3>
+              <p>Let history support copy again, raw vs cleaned comparison, vocabulary extraction, and cleanup feedback.</p>
+            </article>
+            <article class="card card-pad">
+              <h3>Strategic guardrail</h3>
+              <p>Stay tiny and immediate. Yap wins when it feels less like a product and more like a reflex.</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="benchmark">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Suggested benchmark</p>
+            <h2>Turn the scan into product decisions with hands-on tests.</h2>
+          </div>
+          <p class="section-note">
+            Test Yap against BetterDictation, Wispr Flow, Aqua Voice, and
+            Superwhisper using identical prompts and target apps.
+          </p>
+        </div>
+
+        <div class="benchmark">
+          <article class="card card-pad">
+            <h3>Prompt set</h3>
+            <ul>
+              <li>Messages or Slack short reply: 10-20 seconds.</li>
+              <li>Gmail or email paragraph: 30-60 seconds.</li>
+              <li>Cursor, Claude, or Codex coding instruction: 30-60 seconds with technical terms.</li>
+              <li>Notes long-form ramble: 2-3 minutes with corrections and pauses.</li>
+              <li>Multilingual or accent test if relevant.</li>
+            </ul>
+          </article>
+
+          <article class="card card-pad">
+            <h3>Apps</h3>
+            <ol>
+              <li>BetterDictation</li>
+              <li>Wispr Flow</li>
+              <li>Aqua Voice</li>
+              <li>Superwhisper</li>
+            </ol>
+          </article>
+        </div>
+
+        <div class="section">
+          <article class="card card-pad">
+            <h3>Measure</h3>
+            <div class="tag-cloud">
+              <span class="tag">Release-to-text latency</span>
+              <span class="tag">Paste reliability</span>
+              <span class="tag">Cleanup quality</span>
+              <span class="tag">Punctuation</span>
+              <span class="tag">Paragraph formatting</span>
+              <span class="tag">Names and acronyms</span>
+              <span class="tag">Error recovery</span>
+              <span class="tag">Permission friction</span>
+              <span class="tag">CPU/memory</span>
+              <span class="tag">Safe-to-send trust</span>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="section" id="sources">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Sources</p>
+            <h2>Research links used for this scan.</h2>
+          </div>
+          <p class="section-note">
+            Product pages are preferred. Coverage is used for market context and
+            newer products where official pages were sparse.
+          </p>
+        </div>
+
+        <article class="card card-pad">
+          <ul class="sources">
+            <li><a href="https://wisprflow.ai/">Wispr Flow homepage</a></li>
+            <li><a href="https://wisprflow.ai/pricing">Wispr Flow pricing</a></li>
+            <li><a href="https://wisprflow.ai/privacy">Wispr Flow privacy/security</a></li>
+            <li><a href="https://aquavoice.com/">Aqua Voice homepage/pricing</a></li>
+            <li><a href="https://superwhisper.com/">Superwhisper homepage/pricing</a></li>
+            <li><a href="https://www.betterdictation.com/">BetterDictation homepage/pricing/FAQ</a></li>
+            <li><a href="https://otter.ai/pricing">Otter.ai pricing</a></li>
+            <li><a href="https://dragon.nuance.com/en-us/home-professional-and-consumer">Nuance Dragon</a></li>
+            <li><a href="https://www.techradar.com/best/dictation-software">TechRadar best dictation software 2025</a></li>
+            <li><a href="https://www.tomsguide.com/ai/google-just-launched-a-free-ai-dictation-app-that-fixes-your-speech-and-it-even-works-offline">Tom's Guide on Google AI Edge Eloquent</a></li>
+            <li><a href="https://www.techradar.com/ai-platforms-assistants/i-tried-using-googles-new-offline-ai-dictation-app-and-polished-my-ramblings-surprisingly-well">TechRadar hands-on with Google AI Edge Eloquent</a></li>
+            <li><a href="https://www.macwhisper.com/">MacWhisper homepage</a></li>
+          </ul>
+        </article>
+      </section>
+    </main>
+
+    <footer class="footer">
+      Built as a static HTML artifact for Yap product planning. Markdown source:
+      <a href="./2026-06-24-dictation-market-scan.md">2026-06-24-dictation-market-scan.md</a>.
+    </footer>
+  </body>
+</html>

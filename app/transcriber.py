@@ -48,6 +48,16 @@ class TranscriptionProvider(ABC):
         ...
 
 
+class UnconfiguredTranscriber(TranscriptionProvider):
+    """Placeholder used by the menubar app before API keys are configured."""
+
+    def __init__(self, reason: str):
+        self.reason = reason
+
+    def transcribe(self, wav_bytes: bytes) -> TranscriptionResult:
+        raise RuntimeError(self.reason)
+
+
 def _post_with_retry(
     client: httpx.Client,
     url: str,
@@ -267,10 +277,13 @@ def create_transcriber(
     vocabulary: list[str] | None = None,
     allowed_languages: list[str] | None = None,
     fallback_languages: list[str] | None = None,
+    allow_unconfigured: bool = False,
 ) -> TranscriptionProvider:
     """Factory: create the configured transcription provider."""
     if provider == "groq":
         if not groq_api_key:
+            if allow_unconfigured:
+                return UnconfiguredTranscriber("GROQ_API_KEY is required for Groq transcription")
             raise ValueError("GROQ_API_KEY is required for Groq transcription")
         return GroqTranscriber(
             api_key=groq_api_key,
@@ -280,6 +293,8 @@ def create_transcriber(
         )
 
     if not mistral_api_key:
+        if allow_unconfigured:
+            return UnconfiguredTranscriber("MISTRAL_API_KEY is required for Mistral transcription")
         raise ValueError("MISTRAL_API_KEY is required for Mistral transcription")
     return Transcriber(
         api_key=mistral_api_key,
