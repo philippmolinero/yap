@@ -58,12 +58,22 @@ class SilenceConfig:
 
 
 @dataclass
+class ThaiPracticeConfig:
+    enabled: bool = True
+    modifier_keycode: int = 60
+    prompt_id: str = "sentence-01"
+    prompt_text: str = "ตอนนั้นฉันอายุเจ็ดขวบ"
+    prompt_source: str = "learning-thai"
+
+
+@dataclass
 class AppConfig:
     hotkey: HotkeyConfig = field(default_factory=HotkeyConfig)
     transcription: TranscriptionConfig = field(default_factory=TranscriptionConfig)
     cleanup: CleanupConfig = field(default_factory=CleanupConfig)
     paste: PasteConfig = field(default_factory=PasteConfig)
     silence: SilenceConfig = field(default_factory=SilenceConfig)
+    thai_practice: ThaiPracticeConfig = field(default_factory=ThaiPracticeConfig)
     vocabulary: list[str] = field(default_factory=list)
     mistral_api_key: str = ""
     groq_api_key: str = ""
@@ -136,6 +146,7 @@ def load_config() -> AppConfig:
     cleanup_raw = raw.get("cleanup", {})
     paste_raw = raw.get("paste", {})
     silence_raw = raw.get("silence", {})
+    thai_practice_raw = raw.get("thai_practice", {})
 
     # API keys: secrets.toml > env vars
     secrets, preferences = _load_secrets()
@@ -166,6 +177,7 @@ def load_config() -> AppConfig:
         cleanup=cleanup_cfg,
         paste=PasteConfig(**paste_raw),
         silence=SilenceConfig(**silence_raw),
+        thai_practice=ThaiPracticeConfig(**thai_practice_raw),
         vocabulary=_load_vocabulary(),
         mistral_api_key=mistral_key,
         groq_api_key=groq_key,

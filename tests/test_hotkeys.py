@@ -35,6 +35,87 @@ class _FakeWaitEvent:
 
 
 class TestHotkeyRecovery:
+    def test_thai_chord_routes_to_thai_callbacks_without_dictation(self, monkeypatch):
+        on_start = mock.Mock()
+        on_stop = mock.Mock()
+        on_thai_start = mock.Mock()
+        on_thai_stop = mock.Mock()
+        mgr = hotkeys.HotkeyManager(
+            on_start=on_start,
+            on_stop=on_stop,
+            keycode=hotkeys.RIGHT_CONTROL_KEYCODE,
+            keycodes=[hotkeys.RIGHT_OPTION_KEYCODE, hotkeys.RIGHT_CONTROL_KEYCODE],
+            on_thai_start=on_thai_start,
+            on_thai_stop=on_thai_stop,
+            thai_modifier_keycode=hotkeys.RIGHT_SHIFT_KEYCODE,
+        )
+        monkeypatch.setattr(hotkeys.threading, "Thread", _InlineThread)
+        monkeypatch.setattr(mgr, "_schedule_release_watchdog", mock.Mock())
+
+        keycode = hotkeys.RIGHT_SHIFT_KEYCODE
+        flags = hotkeys.Quartz.kCGEventFlagMaskShift
+        monkeypatch.setattr(
+            hotkeys.Quartz,
+            "CGEventGetIntegerValueField",
+            lambda *_: keycode,
+        )
+        monkeypatch.setattr(hotkeys.Quartz, "CGEventGetFlags", lambda *_: flags)
+        mgr._callback(None, hotkeys._FLAGS_CHANGED, object(), None)
+
+        keycode = hotkeys.RIGHT_OPTION_KEYCODE
+        flags = hotkeys._RIGHT_OPTION_FLAG
+        monkeypatch.setattr(hotkeys.Quartz, "CGEventGetFlags", lambda *_: flags)
+        mgr._callback(None, hotkeys._FLAGS_CHANGED, object(), None)
+
+        keycode = hotkeys.RIGHT_OPTION_KEYCODE
+        flags = 0
+        monkeypatch.setattr(hotkeys.Quartz, "CGEventGetFlags", lambda *_: flags)
+        mgr._callback(None, hotkeys._FLAGS_CHANGED, object(), None)
+
+        assert on_start.call_count == 0
+        assert on_stop.call_count == 0
+        on_thai_start.assert_called_once()
+        on_thai_stop.assert_called_once()
+
+    def test_thai_modifier_alone_does_not_start_any_capture(self, monkeypatch):
+        on_start = mock.Mock()
+        on_stop = mock.Mock()
+        on_thai_start = mock.Mock()
+        on_thai_stop = mock.Mock()
+        mgr = hotkeys.HotkeyManager(
+            on_start=on_start,
+            on_stop=on_stop,
+            on_thai_start=on_thai_start,
+            on_thai_stop=on_thai_stop,
+            thai_modifier_keycode=hotkeys.RIGHT_SHIFT_KEYCODE,
+        )
+        monkeypatch.setattr(hotkeys.threading, "Thread", _InlineThread)
+        monkeypatch.setattr(mgr, "_schedule_release_watchdog", mock.Mock())
+
+        monkeypatch.setattr(
+            hotkeys.Quartz,
+            "CGEventGetIntegerValueField",
+            lambda *_: hotkeys.RIGHT_SHIFT_KEYCODE,
+        )
+        monkeypatch.setattr(
+            hotkeys.Quartz,
+            "CGEventGetFlags",
+            lambda *_: hotkeys.Quartz.kCGEventFlagMaskShift,
+        )
+        mgr._callback(None, hotkeys._FLAGS_CHANGED, object(), None)
+
+        monkeypatch.setattr(
+            hotkeys.Quartz,
+            "CGEventGetFlags",
+            lambda *_: 0,
+        )
+        mgr._callback(None, hotkeys._FLAGS_CHANGED, object(), None)
+
+        on_start.assert_not_called()
+        on_stop.assert_not_called()
+        on_thai_start.assert_not_called()
+        on_thai_stop.assert_not_called()
+
     def test_watchdog_forces_release_when_key_state_is_up(self, monkeypatch):
         on_stop = mock.Mock()
         mgr = hotkeys.HotkeyManager(on_start=mock.Mock(), on_stop=on_stop)

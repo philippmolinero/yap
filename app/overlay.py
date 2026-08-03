@@ -18,6 +18,7 @@ class OverlayState:
     HIDDEN = "hidden"
     RECORDING = "recording"
     PROCESSING = "processing"
+    CAPTURED = "captured"
 
 
 # Capsule dimensions
@@ -396,6 +397,7 @@ class RecordingOverlay:
         self._manual_audio_level = 0.0
         self._motion_timer = None
         self._expand_timer = None
+        self._captured_timer = None
         self._content_alpha = 1.0
         self._recording_expansion_progress = 1.0
         self._setup()
@@ -488,11 +490,12 @@ class RecordingOverlay:
 
     def _apply_content_alpha(self):
         expansion = self._recording_expansion_progress
+        recording_like = self._state in (OverlayState.RECORDING, OverlayState.CAPTURED)
         if self._dot is not None:
-            dot_alpha = self._content_alpha if self._state == OverlayState.RECORDING else 0.0
+            dot_alpha = self._content_alpha if recording_like else 0.0
             self._dot.setAlphaValue_(dot_alpha)
         if self._separator is not None:
-            separator_alpha = self._content_alpha * expansion if self._state == OverlayState.RECORDING else 0.0
+            separator_alpha = self._content_alpha * expansion if recording_like else 0.0
             self._separator.setAlphaValue_(separator_alpha)
         if self._waveform is not None:
             waveform_alpha = self._content_alpha if self._state == OverlayState.RECORDING else 0.0
@@ -506,6 +509,8 @@ class RecordingOverlay:
                 label_alpha = self._content_alpha * max(
                     0.0, min((expansion - 0.62) / 0.38, 1.0)
                 )
+            elif self._state == OverlayState.CAPTURED:
+                label_alpha = self._content_alpha
             self._label.setAlphaValue_(label_alpha)
 
     def _lerp(self, start: float, end: float, progress: float) -> float:
@@ -573,6 +578,11 @@ class RecordingOverlay:
         if self._expand_timer is not None:
             self._expand_timer.invalidate()
             self._expand_timer = None
+
+    def _cancel_captured_timer(self):
+        if self._captured_timer is not None:
+            self._captured_timer.invalidate()
+            self._captured_timer = None
 
     def _animate_reveal(self, target_progress: float, duration: float, on_complete=None):
         self._cancel_motion()
@@ -701,7 +711,7 @@ class RecordingOverlay:
             expand,
         )
 
-    def show(self, state: str):
+    def show(self, state: str, label: str | None = None):
         """Show overlay with given state."""
         previous_state = self._state
         was_hidden = previous_state == OverlayState.HIDDEN
@@ -709,9 +719,11 @@ class RecordingOverlay:
 
         def _update():
             self._cancel_motion()
+            if state != OverlayState.CAPTURED:
+                self._cancel_captured_timer()
             if state == OverlayState.RECORDING:
                 self._cancel_expand_timer()
-                self._label.setStringValue_("Listening")
+                self._label.setStringValue_(label or "Listening")
                 self._dot.setActive_(True)
                 self._dot.setHidden_(False)
                 self._dot.startAnimating()
@@ -728,6 +740,16 @@ class RecordingOverlay:
                 self._waveform.setHidden_(True)
                 self._spinner.setHidden_(False)
                 self._spinner.startAnimating()
+            elif state == OverlayState.CAPTURED:
+                self._cancel_expand_timer()
+                self._label.setStringValue_(label or "Captured locally")
+                self._dot.stopAnimating()
+                self._dot.setActive_(False)
+                self._dot.setHidden_(False)
+                self._waveform.stopAnimating()
+                self._waveform.setHidden_(True)
+                self._spinner.stopAnimating()
+                self._spinner.setHidden_(True)
 
             self._window.orderFrontRegardless()
             self._window.setAlphaValue_(1.0)
@@ -741,6 +763,9 @@ class RecordingOverlay:
                 elif state == OverlayState.PROCESSING:
                     self._set_recording_expansion(0.0)
                     self._animate_reveal(_PROCESSING_PROGRESS, 0.14)
+                elif state == OverlayState.CAPTURED:
+                    self._set_recording_expansion(1.0)
+                    self._animate_reveal(1.0, 0.16)
                 else:
                     self._animate_reveal(1.0, 0.18)
             else:
@@ -749,7 +774,23 @@ class RecordingOverlay:
                 elif state == OverlayState.RECORDING and previous_state != OverlayState.RECORDING:
                     self._animate_layout(_COMPACT_PROGRESS, 0.0, 0.16)
                     self._schedule_delayed_expansion(_LONG_RECORDING_EXPAND_DELAY)
+                elif state == OverlayState.CAPTURED:
+                    self._animate_layout(1.0, 1.0, 0.16)
                 self._set_content_alpha(1.0)
+
+            if state == OverlayState.CAPTURED:
+                self._cancel_captured_timer()
+
+                def hide_captured(timer):
+                    self._captured_timer = None
+                    if self._state == OverlayState.CAPTURED:
+                        self.hide()
+
+                self._captured_timer = AppKit.NSTimer.scheduledTimerWithTimeInterval_repeats_block_(
+                    1.8,
+                    False,
+                    hide_captured,
+                )
 
         if AppKit.NSThread.isMainThread():
             _update()
@@ -762,6 +803,7 @@ class RecordingOverlay:
 
         def _update():
             self._cancel_expand_timer()
+            self._cancel_captured_timer()
             self._dot.stopAnimating()
             self._waveform.stopAnimating()
             self._spinner.stopAnimating()

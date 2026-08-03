@@ -252,6 +252,11 @@ class TestLoadConfig:
         assert cfg.paste.delay_ms == 50
         assert cfg.silence.timeout == 5.0
         assert cfg.silence.threshold == 0.008
+        assert cfg.thai_practice.enabled is True
+        assert cfg.thai_practice.modifier_keycode == 60
+        assert cfg.thai_practice.prompt_id == "sentence-01"
+        assert cfg.thai_practice.prompt_text == "ตอนนั้นฉันอายุเจ็ดขวบ"
+        assert cfg.thai_practice.prompt_source == "learning-thai"
 
 class TestEnsureConfigDir:
     """Config dir creation and bundled file copying."""

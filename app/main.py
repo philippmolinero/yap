@@ -23,6 +23,11 @@ from app.recorder import Recorder
 from app.resources import get_resource_path
 from app.settings_dialog import SettingsDialog
 from app.sounds import SoundFeedback
+from app.thai_practice import (
+    ThaiPracticeCapture,
+    ThaiPracticePrompt,
+    ThaiPracticeState,
+)
 from app.transcriber import UnconfiguredTranscriber, create_transcriber
 from app.updater import UpdateInfo, UpdateManager
 from app.version import APP_NAME, APP_VERSION, bundled_app_path
@@ -72,7 +77,11 @@ class _SleepWakeObserver(AppKit.NSObject):
         try:
             logger.info("System going to sleep — stopping recording and event tap")
             app = self._app
-            if app.pipeline.state == PipelineState.RECORDING or app.recorder.is_recording:
+            if app.thai_practice.state == ThaiPracticeState.RECORDING:
+                logger.info("Active Thai practice recording detected, cancelling before sleep")
+                app.hotkey_mgr.reset()
+                app.thai_practice.cancel_recording(source="sleep")
+            elif app.pipeline.state == PipelineState.RECORDING or app.recorder.is_recording:
                 logger.info("Active recording detected, cancelling before sleep")
                 app.hotkey_mgr.reset()
                 app.pipeline.cancel_recording(source="sleep")
@@ -150,6 +159,21 @@ class YapApp(rumps.App):
             keycode=self.cfg.hotkey.keycode,
             keycodes=self.cfg.hotkey.keycodes,
             double_tap_ms=self.cfg.hotkey.double_tap_ms,
+            on_thai_start=(
+                self._on_thai_hotkey_start
+                if self.cfg.thai_practice.enabled
+                else None
+            ),
+            on_thai_stop=(
+                self._on_thai_hotkey_stop
+                if self.cfg.thai_practice.enabled
+                else None
+            ),
+            thai_modifier_keycode=(
+                self.cfg.thai_practice.modifier_keycode
+                if self.cfg.thai_practice.enabled
+                else None
+            ),
         )
 
         # Sleep/wake observer — must be retained to prevent GC
@@ -187,6 +211,8 @@ class YapApp(rumps.App):
 
     def _build_pipeline(self):
         """Create recorder, transcriber, cleanup, and pipeline from current config."""
+        if hasattr(self, "thai_practice"):
+            self.thai_practice.cancel_recording(source="pipeline_rebuild")
         if hasattr(self, "recorder") and self.recorder is not None:
             self.recorder.force_stop()
         self.recorder = Recorder(
@@ -228,6 +254,17 @@ class YapApp(rumps.App):
             on_error=self._on_pipeline_error,
             failed_recording_path=FAILED_RECORDING_FILE,
         )
+        thai_cfg = self.cfg.thai_practice
+        self.thai_practice = ThaiPracticeCapture(
+            recorder=self.recorder,
+            prompt=ThaiPracticePrompt(
+                prompt_id=thai_cfg.prompt_id,
+                text=thai_cfg.prompt_text,
+                source=thai_cfg.prompt_source,
+            ),
+            on_state_change=self._on_thai_state_change,
+            on_error=self._on_thai_capture_error,
+        )
 
     def _on_hotkey_start(self):
         # Already running in a daemon thread (dispatched from HotkeyManager._handle_down)
@@ -242,6 +279,48 @@ class YapApp(rumps.App):
     def _on_hotkey_stop(self):
         # Already running in a daemon thread (dispatched from HotkeyManager._handle_up)
         self.pipeline.stop_recording_and_process(source="hotkey_up")
+
+    def _on_thai_hotkey_start(self):
+        # Thai practice is local and does not require transcription credentials.
+        self.thai_practice.start_recording(source="thai_hotkey_down")
+
+    def _on_thai_hotkey_stop(self):
+        self.thai_practice.stop_recording(source="thai_hotkey_up")
+
+    def _on_thai_state_change(self, state: ThaiPracticeState):
+        if state == ThaiPracticeState.RECORDING:
+            self.sounds.play_start()
+        elif state == ThaiPracticeState.CAPTURED:
+            self.sounds.play_stop()
+
+        def update():
+            if state == ThaiPracticeState.RECORDING:
+                prompt = self.thai_practice.prompt.text
+                self.status_item.title = f"Thai: {prompt}"
+                self.stop_item.set_callback(self._on_stop_clicked)
+                self.overlay.show(OverlayState.RECORDING, label="Thai listening")
+            elif state == ThaiPracticeState.CAPTURED:
+                self.status_item.title = "Status: Thai Captured"
+                self.stop_item.set_callback(None)
+                self.overlay.show(OverlayState.CAPTURED, label="Captured locally")
+            else:
+                if not self._pipeline_ready:
+                    self.status_item.title = "Status: Missing API Key"
+                else:
+                    self.status_item.title = "Status: Idle"
+                self.stop_item.set_callback(None)
+                self.overlay.hide()
+
+        AppKit.NSOperationQueue.mainQueue().addOperationWithBlock_(update)
+
+    def _on_thai_capture_error(self, reason: str):
+        logger.warning("Thai practice capture failed: %s", reason)
+        self.sounds.play_error()
+
+        def update():
+            self.status_item.title = f"Status: Thai capture failed ({reason})"
+
+        AppKit.NSOperationQueue.mainQueue().addOperationWithBlock_(update)
 
     def _on_state_change(self, state: PipelineState):
         if state == PipelineState.RECORDING:
@@ -337,8 +416,9 @@ class YapApp(rumps.App):
     def _on_stop_clicked(self, _):
         """Menu bar stop button — emergency escape hatch."""
         logger.info(
-            "Emergency stop from menu bar (pipeline=%s, recorder_active=%s)",
+            "Emergency stop from menu bar (pipeline=%s, thai=%s, recorder_active=%s)",
             self.pipeline.state.value,
+            self.thai_practice.state.value,
             self.recorder.is_recording,
         )
         # Immediately disable the button and reset hotkey state so
@@ -346,15 +426,30 @@ class YapApp(rumps.App):
         self.stop_item.set_callback(None)
         self.hotkey_mgr.reset()
 
-        threading.Thread(
-            target=self.pipeline.cancel_recording,
-            kwargs={"source": "menu_stop"},
-            daemon=True,
-        ).start()
+        if self.thai_practice.state == ThaiPracticeState.RECORDING:
+            threading.Thread(
+                target=self.thai_practice.cancel_recording,
+                kwargs={"source": "menu_stop"},
+                daemon=True,
+            ).start()
+        else:
+            threading.Thread(
+                target=self.pipeline.cancel_recording,
+                kwargs={"source": "menu_stop"},
+                daemon=True,
+            ).start()
 
     def _on_silence(self):
         """Called from recorder when silence exceeds timeout — auto-stop."""
         logger.info("Silence detected — auto-stopping")
+        if self.thai_practice.state == ThaiPracticeState.RECORDING:
+            self.hotkey_mgr.reset()
+            threading.Thread(
+                target=self.thai_practice.stop_recording,
+                kwargs={"source": "silence", "abort_recording_stop": True},
+                daemon=True,
+            ).start()
+            return
         if self.pipeline.state != PipelineState.RECORDING:
             if self.recorder.is_recording:
                 logger.warning("Silence callback while IDLE but recorder active — cancelling recorder")

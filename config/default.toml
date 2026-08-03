@@ -21,3 +21,10 @@ delay_ms = 50
 [silence]
 timeout = 5.0               # seconds of silence before auto-stop (0 = disabled)
 threshold = 0.008            # RMS level below this counts as silence
+
+[thai_practice]
+enabled = true
+modifier_keycode = 60        # Right Shift; hold this before the existing YAP trigger
+prompt_id = "sentence-01"
+prompt_text = "ตอนนั้นฉันอายุเจ็ดขวบ"
+prompt_source = "learning-thai"
