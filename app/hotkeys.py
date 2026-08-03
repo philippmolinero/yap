@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 # Keycodes for common trigger keys.
 RIGHT_OPTION_KEYCODE = 61
 RIGHT_CONTROL_KEYCODE = 62
+RIGHT_SHIFT_KEYCODE = 60
 _RELEASE_WATCHDOG_INTERVAL_S = 0.2
 _RELEASE_MISS_TICKS_REQUIRED = 2
 _INPUT_MONITORING_POLL_INTERVAL_S = 1.0
@@ -55,9 +56,14 @@ class HotkeyManager:
         keycode: int = RIGHT_CONTROL_KEYCODE,
         keycodes: list[int] | tuple[int, ...] | None = None,
         double_tap_ms: int = 300,
+        on_thai_start: Callable[[], None] | None = None,
+        on_thai_stop: Callable[[], None] | None = None,
+        thai_modifier_keycode: int | None = None,
     ):
         self.on_start = on_start
         self.on_stop = on_stop
+        self.on_thai_start = on_thai_start
+        self.on_thai_stop = on_thai_stop
         self.keycode = keycode
         configured_keycodes = list(keycodes or [])
         if keycode not in configured_keycodes:
@@ -68,6 +74,12 @@ class HotkeyManager:
             configured_keycode: _MODIFIER_FLAGS_BY_KEYCODE.get(configured_keycode)
             for configured_keycode in self.keycodes
         }
+        self.thai_modifier_keycode = thai_modifier_keycode
+        self._thai_modifier_flag = (
+            _MODIFIER_FLAGS_BY_KEYCODE.get(thai_modifier_keycode)
+            if thai_modifier_keycode is not None
+            else None
+        )
         self.double_tap_ms = double_tap_ms
 
         self._active = False  # Currently recording
@@ -75,6 +87,8 @@ class HotkeyManager:
         self._last_down_time = 0.0
         self._option_held = False
         self._held_keycode: int | None = None
+        self._thai_modifier_held = False
+        self._active_mode: str | None = None
         self._thread: threading.Thread | None = None
         self._thread_lock = threading.Lock()
         self._stop_event = threading.Event()
@@ -175,11 +189,12 @@ class HotkeyManager:
     def _release_if_needed(self):
         if not self._option_held:
             return
+        active_mode = self._active_mode
         self._option_held = False
         self._held_keycode = None
         self._release_miss_ticks = 0
         self._cancel_release_watchdog()
-        self._handle_up()
+        self._handle_up(active_mode)
 
     def _record_forced_release(self, reason: str):
         self._forced_release_count += 1
@@ -210,7 +225,8 @@ class HotkeyManager:
             if event_type == _KEY_DOWN and not self._option_held:
                 self._option_held = True
                 self._held_keycode = keycode
-                self._handle_down()
+                mode = "thai" if self._thai_modifier_held else "dictation"
+                self._handle_down(mode)
             elif (
                 event_type == _KEY_UP
                 and self._option_held
@@ -226,6 +242,20 @@ class HotkeyManager:
                 event, Quartz.kCGKeyboardEventKeycode
             )
 
+            if keycode == self.thai_modifier_keycode:
+                if self._thai_modifier_flag is None:
+                    return event
+
+                self._thai_modifier_held = bool(flags & self._thai_modifier_flag)
+                if (
+                    not self._thai_modifier_held
+                    and self._option_held
+                    and self._active_mode == "thai"
+                ):
+                    # Releasing either half of the chord ends Thai capture.
+                    self._release_if_needed()
+                return event
+
             if keycode not in self._keycode_set:
                 return event
 
@@ -239,7 +269,8 @@ class HotkeyManager:
                 # Key pressed down
                 self._option_held = True
                 self._held_keycode = keycode
-                self._handle_down()
+                mode = "thai" if self._thai_modifier_held else "dictation"
+                self._handle_down(mode)
             elif (
                 not modifier_down
                 and self._option_held
@@ -250,7 +281,22 @@ class HotkeyManager:
 
         return event
 
-    def _handle_down(self):
+    def _handle_down(self, mode: str = "dictation"):
+        if mode == "thai":
+            if self._active:
+                logger.warning("Thai chord ignored while another capture is active")
+                return
+            self._active = True
+            self._toggle_mode = False
+            self._active_mode = "thai"
+            self._release_miss_ticks = 0
+            logger.info("Thai practice chord — recording")
+            if self.on_thai_start is not None:
+                threading.Thread(target=self.on_thai_start, daemon=True).start()
+            self._schedule_release_watchdog()
+            self._last_down_time = time.time()
+            return
+
         now = time.time()
         elapsed_ms = (now - self._last_down_time) * 1000
         self._release_miss_ticks = 0
@@ -259,31 +305,40 @@ class HotkeyManager:
             # In toggle mode — a new tap stops recording
             self._toggle_mode = False
             self._active = False
+            self._active_mode = None
             logger.info("Toggle mode off — stopping")
             threading.Thread(target=self.on_stop, daemon=True).start()
         elif not self._active and elapsed_ms < self.double_tap_ms:
             # Double-tap detected — enter toggle mode
             self._toggle_mode = True
             self._active = True
+            self._active_mode = "dictation"
             logger.info("Double-tap — toggle mode on")
             threading.Thread(target=self.on_start, daemon=True).start()
         elif not self._active:
             # Single press — hold-to-talk
             self._active = True
             self._toggle_mode = False
+            self._active_mode = "dictation"
             logger.info("Hold-to-talk — recording")
             threading.Thread(target=self.on_start, daemon=True).start()
 
         self._schedule_release_watchdog()
         self._last_down_time = now
 
-    def _handle_up(self):
+    def _handle_up(self, mode: str | None = None):
         self._cancel_release_watchdog()
         if self._active and not self._toggle_mode:
             # Release in hold-to-talk mode — stop
             self._active = False
-            logger.info("Released — stopping")
-            threading.Thread(target=self.on_stop, daemon=True).start()
+            self._active_mode = None
+            if mode == "thai":
+                logger.info("Thai practice chord released — stopping")
+                if self.on_thai_stop is not None:
+                    threading.Thread(target=self.on_thai_stop, daemon=True).start()
+            else:
+                logger.info("Released — stopping")
+                threading.Thread(target=self.on_stop, daemon=True).start()
         # In toggle mode, release is ignored
 
     def _wait_for_input_monitoring(self) -> bool:
@@ -359,6 +414,9 @@ class HotkeyManager:
         self._active = False
         self._toggle_mode = False
         self._option_held = False
+        self._held_keycode = None
+        self._thai_modifier_held = False
+        self._active_mode = None
 
     def _show_permission_alert_once(self):
         """Show a user-visible alert when Input Monitoring permission is missing."""
