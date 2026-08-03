@@ -19,6 +19,7 @@ class OverlayState:
     RECORDING = "recording"
     PROCESSING = "processing"
     CAPTURED = "captured"
+    PITCH_ANALYZED = "pitch_analyzed"
 
 
 # Capsule dimensions
@@ -381,6 +382,77 @@ class SpinnerView(AppKit.NSView):
         self.setNeedsDisplay_(True)
 
 
+class PitchContourView(AppKit.NSView):
+    """Small speaker-normalized F0 contour for local evidence only."""
+
+    def initWithFrame_(self, frame):
+        self = objc.super(PitchContourView, self).initWithFrame_(frame)
+        if self is None:
+            return None
+        self._points = ()
+        return self
+
+    def setPoints_(self, points):
+        self._points = tuple(
+            None if point is None else float(point)
+            for point in (points or ())
+        )
+        self.setNeedsDisplay_(True)
+
+    def drawRect_(self, rect):
+        frame = self.frame()
+        if frame.size.width <= 0 or frame.size.height <= 0:
+            return
+
+        inset_x = 2.0
+        inset_y = 5.0
+        plot_width = max(frame.size.width - inset_x * 2, 1.0)
+        plot_height = max(frame.size.height - inset_y * 2, 1.0)
+        semitone_range = 12.0
+
+        # A quiet center line makes direction changes legible without implying
+        # that any particular contour is the correct Thai lexical tone.
+        baseline = AppKit.NSBezierPath.bezierPath()
+        baseline.moveToPoint_(AppKit.NSMakePoint(inset_x, frame.size.height / 2))
+        baseline.lineToPoint_(
+            AppKit.NSMakePoint(frame.size.width - inset_x, frame.size.height / 2)
+        )
+        _HAIRLINE.colorWithAlphaComponent_(0.65).setStroke()
+        baseline.setLineWidth_(0.75)
+        baseline.stroke()
+
+        if len(self._points) < 2:
+            return
+
+        def point_for(index, value):
+            x = inset_x + plot_width * index / max(len(self._points) - 1, 1)
+            clamped = max(-semitone_range, min(semitone_range, value))
+            y = inset_y + plot_height * (clamped + semitone_range) / (2 * semitone_range)
+            return AppKit.NSMakePoint(x, y)
+
+        path = None
+        for index, value in enumerate(self._points):
+            if value is None or not math.isfinite(value):
+                if path is not None:
+                    _SAGE_LIGHT.colorWithAlphaComponent_(0.92).setStroke()
+                    path.setLineWidth_(1.8)
+                    path.stroke()
+                    path = None
+                continue
+
+            point = point_for(index, value)
+            if path is None:
+                path = AppKit.NSBezierPath.bezierPath()
+                path.moveToPoint_(point)
+            else:
+                path.lineToPoint_(point)
+
+        if path is not None:
+            _SAGE_LIGHT.colorWithAlphaComponent_(0.92).setStroke()
+            path.setLineWidth_(1.8)
+            path.stroke()
+
+
 class RecordingOverlay:
     """Compact native capsule at the bottom of the screen."""
 
@@ -392,6 +464,7 @@ class RecordingOverlay:
         self._label = None
         self._waveform = None
         self._spinner = None
+        self._contour = None
         self._state = OverlayState.HIDDEN
         self._level_provider = None
         self._manual_audio_level = 0.0
@@ -482,6 +555,18 @@ class RecordingOverlay:
         )
         self._spinner.setHidden_(True)
         self._container.addSubview_(self._spinner)
+
+        # Pitch contour (Thai practice result)
+        self._contour = PitchContourView.alloc().initWithFrame_(
+            AppKit.NSMakeRect(
+                _GLOW_PADDING + _WAVEFORM_X,
+                _GLOW_PADDING + 8,
+                _WAVEFORM_WIDTH,
+                30,
+            )
+        )
+        self._contour.setHidden_(True)
+        self._container.addSubview_(self._contour)
         self._set_recording_expansion(1.0)
 
     def _set_content_alpha(self, alpha: float):
@@ -490,7 +575,11 @@ class RecordingOverlay:
 
     def _apply_content_alpha(self):
         expansion = self._recording_expansion_progress
-        recording_like = self._state in (OverlayState.RECORDING, OverlayState.CAPTURED)
+        recording_like = self._state in (
+            OverlayState.RECORDING,
+            OverlayState.CAPTURED,
+            OverlayState.PITCH_ANALYZED,
+        )
         if self._dot is not None:
             dot_alpha = self._content_alpha if recording_like else 0.0
             self._dot.setAlphaValue_(dot_alpha)
@@ -503,6 +592,13 @@ class RecordingOverlay:
         if self._spinner is not None:
             spinner_alpha = self._content_alpha if self._state == OverlayState.PROCESSING else 0.0
             self._spinner.setAlphaValue_(spinner_alpha)
+        if self._contour is not None:
+            contour_alpha = (
+                self._content_alpha
+                if self._state == OverlayState.PITCH_ANALYZED
+                else 0.0
+            )
+            self._contour.setAlphaValue_(contour_alpha)
         if self._label is not None:
             label_alpha = 0.0
             if self._state == OverlayState.RECORDING:
@@ -510,6 +606,8 @@ class RecordingOverlay:
                     0.0, min((expansion - 0.62) / 0.38, 1.0)
                 )
             elif self._state == OverlayState.CAPTURED:
+                label_alpha = self._content_alpha
+            elif self._state == OverlayState.PITCH_ANALYZED:
                 label_alpha = self._content_alpha
             self._label.setAlphaValue_(label_alpha)
 
@@ -564,6 +662,14 @@ class RecordingOverlay:
                 _GLOW_PADDING + spinner_x,
                 _GLOW_PADDING + 8,
                 spinner_width,
+                30,
+            )
+        )
+        self._contour.setFrame_(
+            AppKit.NSMakeRect(
+                _GLOW_PADDING + waveform_x,
+                _GLOW_PADDING + 8,
+                waveform_width,
                 30,
             )
         )
@@ -711,7 +817,12 @@ class RecordingOverlay:
             expand,
         )
 
-    def show(self, state: str, label: str | None = None):
+    def show(
+        self,
+        state: str,
+        label: str | None = None,
+        contour: tuple[float | None, ...] | None = None,
+    ):
         """Show overlay with given state."""
         previous_state = self._state
         was_hidden = previous_state == OverlayState.HIDDEN
@@ -719,7 +830,7 @@ class RecordingOverlay:
 
         def _update():
             self._cancel_motion()
-            if state != OverlayState.CAPTURED:
+            if state not in (OverlayState.CAPTURED, OverlayState.PITCH_ANALYZED):
                 self._cancel_captured_timer()
             if state == OverlayState.RECORDING:
                 self._cancel_expand_timer()
@@ -731,6 +842,7 @@ class RecordingOverlay:
                 self._waveform.startAnimating()
                 self._spinner.stopAnimating()
                 self._spinner.setHidden_(True)
+                self._contour.setHidden_(True)
             elif state == OverlayState.PROCESSING:
                 self._cancel_expand_timer()
                 self._dot.stopAnimating()
@@ -740,6 +852,7 @@ class RecordingOverlay:
                 self._waveform.setHidden_(True)
                 self._spinner.setHidden_(False)
                 self._spinner.startAnimating()
+                self._contour.setHidden_(True)
             elif state == OverlayState.CAPTURED:
                 self._cancel_expand_timer()
                 self._label.setStringValue_(label or "Captured locally")
@@ -750,6 +863,19 @@ class RecordingOverlay:
                 self._waveform.setHidden_(True)
                 self._spinner.stopAnimating()
                 self._spinner.setHidden_(True)
+                self._contour.setHidden_(True)
+            elif state == OverlayState.PITCH_ANALYZED:
+                self._cancel_expand_timer()
+                self._label.setStringValue_(label or "Pitch contour")
+                self._dot.stopAnimating()
+                self._dot.setActive_(False)
+                self._dot.setHidden_(False)
+                self._waveform.stopAnimating()
+                self._waveform.setHidden_(True)
+                self._spinner.stopAnimating()
+                self._spinner.setHidden_(True)
+                self._contour.setPoints_(contour)
+                self._contour.setHidden_(False)
 
             self._window.orderFrontRegardless()
             self._window.setAlphaValue_(1.0)
@@ -766,6 +892,9 @@ class RecordingOverlay:
                 elif state == OverlayState.CAPTURED:
                     self._set_recording_expansion(1.0)
                     self._animate_reveal(1.0, 0.16)
+                elif state == OverlayState.PITCH_ANALYZED:
+                    self._set_recording_expansion(1.0)
+                    self._animate_reveal(1.0, 0.16)
                 else:
                     self._animate_reveal(1.0, 0.18)
             else:
@@ -776,20 +905,22 @@ class RecordingOverlay:
                     self._schedule_delayed_expansion(_LONG_RECORDING_EXPAND_DELAY)
                 elif state == OverlayState.CAPTURED:
                     self._animate_layout(1.0, 1.0, 0.16)
+                elif state == OverlayState.PITCH_ANALYZED:
+                    self._animate_layout(1.0, 1.0, 0.16)
                 self._set_content_alpha(1.0)
 
-            if state == OverlayState.CAPTURED:
+            if state in (OverlayState.CAPTURED, OverlayState.PITCH_ANALYZED):
                 self._cancel_captured_timer()
 
-                def hide_captured(timer):
+                def hide_result(timer):
                     self._captured_timer = None
-                    if self._state == OverlayState.CAPTURED:
+                    if self._state in (OverlayState.CAPTURED, OverlayState.PITCH_ANALYZED):
                         self.hide()
 
                 self._captured_timer = AppKit.NSTimer.scheduledTimerWithTimeInterval_repeats_block_(
-                    1.8,
+                    2.6 if state == OverlayState.PITCH_ANALYZED else 1.8,
                     False,
-                    hide_captured,
+                    hide_result,
                 )
 
         if AppKit.NSThread.isMainThread():
@@ -807,6 +938,8 @@ class RecordingOverlay:
             self._dot.stopAnimating()
             self._waveform.stopAnimating()
             self._spinner.stopAnimating()
+            self._contour.setHidden_(True)
+            self._contour.setPoints_(())
 
             def _finish():
                 self._window.setAlphaValue_(0.0)

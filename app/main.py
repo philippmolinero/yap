@@ -23,8 +23,13 @@ from app.recorder import Recorder
 from app.resources import get_resource_path
 from app.settings_dialog import SettingsDialog
 from app.sounds import SoundFeedback
+from app.thai_analysis import (
+    ThaiPitchAnalyzer,
+    ThaiPitchStatus,
+)
 from app.thai_practice import (
     ThaiPracticeCapture,
+    ThaiPracticeCaptureResult,
     ThaiPracticePrompt,
     ThaiPracticeState,
 )
@@ -122,6 +127,7 @@ class YapApp(rumps.App):
 
         # Load config
         self.cfg = load_config()
+        self._thai_pitch_analyzer = ThaiPitchAnalyzer()
 
         # Sound feedback
         self.sounds = SoundFeedback()
@@ -263,6 +269,7 @@ class YapApp(rumps.App):
                 source=thai_cfg.prompt_source,
             ),
             on_state_change=self._on_thai_state_change,
+            on_captured=self._on_thai_capture_captured,
             on_error=self._on_thai_capture_error,
         )
 
@@ -286,6 +293,61 @@ class YapApp(rumps.App):
 
     def _on_thai_hotkey_stop(self):
         self.thai_practice.stop_recording(source="thai_hotkey_up")
+
+    def _on_thai_capture_captured(self, capture: ThaiPracticeCaptureResult):
+        """Analyze one retained Thai capture locally, off the UI thread."""
+
+        def show_processing():
+            try:
+                if self.thai_practice.last_capture is not capture:
+                    return
+                self.status_item.title = "Status: Thai Pitch Analysis"
+                self.stop_item.set_callback(None)
+                self.overlay.show(OverlayState.PROCESSING, label="Pitch locally")
+            except Exception:
+                logger.exception("Could not show Thai pitch processing state")
+
+        AppKit.NSOperationQueue.mainQueue().addOperationWithBlock_(show_processing)
+        threading.Thread(
+            target=self._analyze_thai_capture,
+            args=(capture,),
+            daemon=True,
+        ).start()
+
+    def _analyze_thai_capture(self, capture: ThaiPracticeCaptureResult):
+        result = self._thai_pitch_analyzer.analyze(capture.wav_bytes)
+
+        def show_result():
+            try:
+                # A new capture supersedes an older analysis. This keeps a
+                # slow result from replacing the current practice attempt.
+                if self.thai_practice.last_capture is not capture:
+                    return
+                coverage = round(result.voiced_coverage * 100)
+                if result.status == ThaiPitchStatus.ANALYZED:
+                    label = f"Pitch {coverage}%"
+                    status = f"Status: Thai pitch contour ({coverage}% voiced)"
+                elif result.status == ThaiPitchStatus.UNCERTAIN:
+                    label = "Pitch review"
+                    status = f"Status: Thai pitch uncertain ({coverage}% voiced)"
+                elif result.status == ThaiPitchStatus.NO_VOICE:
+                    label = "No voiced pitch"
+                    status = "Status: Thai pitch found no voiced frames"
+                else:
+                    label = "Pitch unavailable"
+                    status = "Status: Thai pitch unavailable"
+
+                self.status_item.title = status
+                self.stop_item.set_callback(None)
+                self.overlay.show(
+                    OverlayState.PITCH_ANALYZED,
+                    label=label,
+                    contour=result.semitone_contour,
+                )
+            except Exception:
+                logger.exception("Could not show Thai pitch analysis result")
+
+        AppKit.NSOperationQueue.mainQueue().addOperationWithBlock_(show_result)
 
     def _on_thai_state_change(self, state: ThaiPracticeState):
         if state == ThaiPracticeState.RECORDING:

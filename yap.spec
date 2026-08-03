@@ -25,6 +25,7 @@ a = Analysis(
         "sounddevice",
         "soundfile",
         "numpy",
+        "parselmouth",
         "groq",
         "httpx",
         "dotenv",
