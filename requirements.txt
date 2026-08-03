@@ -1,5 +1,6 @@
 sounddevice
 soundfile
+praat-parselmouth
 numpy
 mistralai
 groq
