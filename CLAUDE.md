@@ -1,7 +1,7 @@
 # Yap — macOS Menubar Dictation App
 
 ## About
-Yap is a lightweight macOS menubar app for voice dictation. Hold Right Option to record, release to transcribe and paste text into the active app. Designed for fast, low-friction dictation — no windows, no UI chrome, just a subtle overlay and audio feedback. Uses Voxtral (Mistral) for transcription and Groq LLM for transcript cleanup (filler removal, punctuation). Supports hold-to-talk and double-tap toggle modes, silence auto-stop, and a history of recent dictations.
+Yap is a lightweight macOS menubar app for voice dictation. Hold Right Option to record, release to transcribe and paste text into the active app. Designed for fast, low-friction dictation — no windows, no UI chrome, just a subtle overlay and audio feedback. Uses Voxtral (Mistral) for transcription and Groq, Mistral, or Cerebras LLMs for transcript cleanup (filler removal, punctuation). Supports hold-to-talk and double-tap toggle modes, silence auto-stop, and a history of recent dictations.
 
 ## Naming
 - Project directory: `yap/`
@@ -20,7 +20,7 @@ Yap is a lightweight macOS menubar app for voice dictation. Hold Right Option to
 - Logs: `~/.config/yap/yap.log` (bundled app only, overwritten each launch)
 - History: `~/.config/yap/history.json` (persisted recent dictations)
 - Failed recording rescue: `~/.config/yap/last_failed_recording.wav` (kept for "Retry Failed Dictation" menu item after a transcription failure)
-- Env vars: `MISTRAL_API_KEY`, `GROQ_API_KEY` in `.env` (dev fallback)
+- Env vars: `MISTRAL_API_KEY`, `GROQ_API_KEY`, `CEREBRAS_API_KEY` in `.env` (dev fallback)
 
 ## Update Workflow
 - Day-to-day updates: run `./update.sh`
@@ -31,7 +31,7 @@ Yap is a lightweight macOS menubar app for voice dictation. Hold Right Option to
 - After `--full-clean`, you must re-enter API keys in Settings
 
 ## Architecture
-- Pipeline: hotkey → recorder → transcriber (Voxtral/Groq, with retry on transient errors) → cleanup (Groq) → paster (NSPasteboard + native CGEvent Cmd+V, osascript fallback)
+- Pipeline: hotkey → recorder → transcriber (Voxtral/Groq, with retry on transient errors) → cleanup (Groq/Mistral/Cerebras) → paster (NSPasteboard + native CGEvent Cmd+V, osascript fallback)
 - Transcription failures stash the WAV to `last_failed_recording.wav` and fire the pipeline `on_error` callback (error sound + "Retry Failed Dictation" menu item)
 - UI: rumps menubar app + frosted glass overlay (AppKit/NSVisualEffectView) + settings dialog (NSWindow)
 - Hotkeys: Quartz CGEventTap on Right Option (hold-to-talk + double-tap toggle)

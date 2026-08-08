@@ -23,7 +23,7 @@ from dotenv import load_dotenv
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from app.cleanup import GroqCleanup
+from app.cleanup import CerebrasCleanup, GroqCleanup
 from app.transcriber import GroqTranscriber, Transcriber
 
 ASR_CANDIDATES = [
@@ -38,6 +38,7 @@ CLEANUP_CANDIDATES = [
     ("groq", "openai/gpt-oss-20b"),
     ("groq", "llama-3.1-8b-instant"),
     ("groq", "llama-3.3-70b-versatile"),
+    ("cerebras", "gpt-oss-120b"),
 ]
 
 SAMPLES = [
@@ -154,9 +155,12 @@ def transcribe(provider: str, model: str, wav_bytes: bytes) -> tuple[str, str, f
 
 
 def clean(provider: str, model: str, text: str, language: str) -> tuple[str, float]:
-    if provider != "groq":
+    if provider == "groq":
+        cleanup = GroqCleanup(api_key=os.environ["GROQ_API_KEY"], model=model)
+    elif provider == "cerebras":
+        cleanup = CerebrasCleanup(api_key=os.environ["CEREBRAS_API_KEY"], model=model)
+    else:
         raise ValueError(f"Unknown cleanup provider: {provider}")
-    cleanup = GroqCleanup(api_key=os.environ["GROQ_API_KEY"], model=model)
     result = cleanup.clean(text, language)
     return result.text, result.latency
 
@@ -203,11 +207,17 @@ def run_asr() -> list[Result]:
 
 
 def run_cleanup() -> list[Result]:
-    if not os.environ.get("GROQ_API_KEY"):
+    available = {
+        "groq": bool(os.environ.get("GROQ_API_KEY")),
+        "cerebras": bool(os.environ.get("CEREBRAS_API_KEY")),
+    }
+    if not any(available.values()):
         return []
 
     results: list[Result] = []
     for provider, model in CLEANUP_CANDIDATES:
+        if not available.get(provider):
+            continue
         for sample in SAMPLES:
             try:
                 text, latency = clean(provider, model, sample["raw_cleanup"], sample["language"])

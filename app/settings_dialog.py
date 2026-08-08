@@ -11,7 +11,7 @@ from app.config import SECRETS_FILE, load_config, save_secrets
 logger = logging.getLogger(__name__)
 
 _WINDOW_WIDTH = 420
-_WINDOW_HEIGHT = 240
+_WINDOW_HEIGHT = 300
 _FIELD_HEIGHT = 24
 _LABEL_WIDTH = 120
 _PADDING = 20
@@ -88,6 +88,13 @@ class _SettingsController(AppKit.NSObject):
         except Exception:
             logger.exception("Error in pasteGroqClicked_")
 
+    @objc.IBAction
+    def pasteCerebrasClicked_(self, sender):
+        try:
+            self._dialog._paste_into_field(self._dialog._cerebras_field)
+        except Exception:
+            logger.exception("Error in pasteCerebrasClicked_")
+
 
 class SettingsDialog:
     """Modal-ish settings window for API keys."""
@@ -97,6 +104,7 @@ class SettingsDialog:
         self._window = None
         self._mistral_field = None
         self._groq_field = None
+        self._cerebras_field = None
         self._cleanup_popup = None
         self._controller = None
 
@@ -207,6 +215,29 @@ class SettingsDialog:
         groq_paste_btn.setAction_("pasteGroqClicked:")
         content.addSubview_(groq_paste_btn)
 
+        # --- Cerebras API Key ---
+        y_pos -= _FIELD_HEIGHT + 16
+
+        cerebras_label = AppKit.NSTextField.labelWithString_("Cerebras API Key:")
+        cerebras_label.setFrame_(AppKit.NSMakeRect(_PADDING, y_pos, _LABEL_WIDTH, _FIELD_HEIGHT))
+        cerebras_label.setAlignment_(AppKit.NSTextAlignmentRight)
+        content.addSubview_(cerebras_label)
+
+        self._cerebras_field = AppKit.NSSecureTextField.alloc().initWithFrame_(
+            AppKit.NSMakeRect(field_x, y_pos, field_width, _FIELD_HEIGHT)
+        )
+        self._cerebras_field.setPlaceholderString_("csk-...")
+        content.addSubview_(self._cerebras_field)
+
+        cerebras_paste_btn = AppKit.NSButton.alloc().initWithFrame_(
+            AppKit.NSMakeRect(paste_x, y_pos, _PASTE_BUTTON_WIDTH, _FIELD_HEIGHT)
+        )
+        cerebras_paste_btn.setTitle_("Paste")
+        cerebras_paste_btn.setBezelStyle_(AppKit.NSBezelStyleRounded)
+        cerebras_paste_btn.setTarget_(self._controller)
+        cerebras_paste_btn.setAction_("pasteCerebrasClicked:")
+        content.addSubview_(cerebras_paste_btn)
+
         # --- Cleanup Provider ---
         y_pos -= _FIELD_HEIGHT + 16
 
@@ -224,7 +255,7 @@ class SettingsDialog:
             ),
             False,
         )
-        self._cleanup_popup.addItemsWithTitles_(["Groq (Fast)", "Mistral", "Disabled"])
+        self._cleanup_popup.addItemsWithTitles_(["Groq (Fast)", "Cerebras (GPT-OSS)", "Mistral", "Disabled"])
         content.addSubview_(self._cleanup_popup)
 
         # --- Buttons ---
@@ -265,12 +296,16 @@ class SettingsDialog:
             self._mistral_field.setStringValue_(cfg.mistral_api_key)
         if cfg.groq_api_key:
             self._groq_field.setStringValue_(cfg.groq_api_key)
+        if cfg.cerebras_api_key:
+            self._cerebras_field.setStringValue_(cfg.cerebras_api_key)
 
         # Pre-select cleanup dropdown
         if not cfg.cleanup.enabled:
             self._cleanup_popup.selectItemWithTitle_("Disabled")
         elif cfg.cleanup.provider == "mistral":
             self._cleanup_popup.selectItemWithTitle_("Mistral")
+        elif cfg.cleanup.provider == "cerebras":
+            self._cleanup_popup.selectItemWithTitle_("Cerebras (GPT-OSS)")
         else:
             self._cleanup_popup.selectItemWithTitle_("Groq (Fast)")
 
@@ -298,13 +333,24 @@ class SettingsDialog:
         try:
             mistral_key = str(self._mistral_field.stringValue())
             groq_key = str(self._groq_field.stringValue())
+            cerebras_key = str(self._cerebras_field.stringValue())
 
             # Map dropdown selection to provider string
             selection = str(self._cleanup_popup.titleOfSelectedItem())
-            provider_map = {"Groq (Fast)": "groq", "Mistral": "mistral", "Disabled": "disabled"}
+            provider_map = {
+                "Groq (Fast)": "groq",
+                "Cerebras (GPT-OSS)": "cerebras",
+                "Mistral": "mistral",
+                "Disabled": "disabled",
+            }
             cleanup_provider = provider_map.get(selection, "groq")
 
-            save_secrets(mistral_api_key=mistral_key, groq_api_key=groq_key, cleanup_provider=cleanup_provider)
+            save_secrets(
+                mistral_api_key=mistral_key,
+                groq_api_key=groq_key,
+                cerebras_api_key=cerebras_key,
+                cleanup_provider=cleanup_provider,
+            )
             logger.info("API keys saved to %s", SECRETS_FILE)
 
             # Brief visual confirmation before closing

@@ -5,7 +5,12 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
+import httpx
+
 logger = logging.getLogger(__name__)
+
+CEREBRAS_CHAT_COMPLETIONS_URL = "https://api.cerebras.ai/v1/chat/completions"
+CEREBRAS_DEFAULT_MODEL = "gpt-oss-120b"
 
 CLEANUP_PROMPT = (
     "You are a deterministic dictation post-processor. The user message contains a raw "
@@ -99,6 +104,66 @@ class GroqCleanup(CleanupProvider):
         )
 
 
+class CerebrasCleanup(CleanupProvider):
+    """Cleanup via Cerebras' OpenAI-compatible chat completions API."""
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str = CEREBRAS_DEFAULT_MODEL,
+        client: httpx.Client | None = None,
+    ):
+        self.api_key = api_key
+        self.model = model
+        self._client = client or httpx.Client(timeout=30.0)
+
+    @staticmethod
+    def _reasoning_effort(model: str) -> str | None:
+        """Choose the least interpretive reasoning mode for known models."""
+        normalized = model.lower()
+        if normalized.startswith("gpt-oss"):
+            return "low"
+        if normalized.startswith(("gemma", "zai-glm")):
+            return "none"
+        return None
+
+    def clean(self, text: str, language: str = "") -> CleanupResult:
+        t0 = time.perf_counter()
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": CLEANUP_PROMPT},
+                {"role": "user", "content": _cleanup_user_message(text, language)},
+            ],
+            "temperature": 0,
+            "max_completion_tokens": 2048,
+        }
+        reasoning_effort = self._reasoning_effort(self.model)
+        if reasoning_effort:
+            payload["reasoning_effort"] = reasoning_effort
+
+        response = self._client.post(
+            CEREBRAS_CHAT_COMPLETIONS_URL,
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+        )
+        response.raise_for_status()
+        body = response.json()
+        choices = body.get("choices") or []
+        if not choices:
+            raise ValueError("Cerebras response contained no choices")
+        message = choices[0].get("message") or {}
+        cleaned = str(message.get("content") or "").strip()
+        latency = time.perf_counter() - t0
+        if not cleaned or _looks_like_meta_response(cleaned):
+            logger.warning("Cerebras cleanup returned unusable output; using raw transcript")
+            cleaned = text.strip()
+        return CleanupResult(text=cleaned, latency=latency)
+
+
 class MistralCleanup(CleanupProvider):
     """Cleanup via Mistral (mistral-small-latest)."""
 
@@ -143,6 +208,9 @@ def create_cleanup(provider: str, api_key: str = "", model: str = "", enabled: b
 
     if provider == "groq" and api_key:
         return GroqCleanup(api_key=api_key, model=model or "meta-llama/llama-4-scout-17b-16e-instruct")
+
+    if provider == "cerebras" and api_key:
+        return CerebrasCleanup(api_key=api_key, model=model or CEREBRAS_DEFAULT_MODEL)
 
     if provider == "mistral" and api_key:
         return MistralCleanup(api_key=api_key, model=model or "mistral-small-latest")

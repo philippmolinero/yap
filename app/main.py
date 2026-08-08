@@ -240,9 +240,11 @@ class YapApp(rumps.App):
         )
         self._pipeline_ready = not isinstance(transcriber, UnconfiguredTranscriber)
         self._pipeline_missing_reason = getattr(transcriber, "reason", "")
-        cleanup_key = {"groq": self.cfg.groq_api_key, "mistral": self.cfg.mistral_api_key}.get(
-            self.cfg.cleanup.provider, ""
-        )
+        cleanup_key = {
+            "groq": self.cfg.groq_api_key,
+            "mistral": self.cfg.mistral_api_key,
+            "cerebras": self.cfg.cerebras_api_key,
+        }.get(self.cfg.cleanup.provider, "")
         cleanup = create_cleanup(
             provider=self.cfg.cleanup.provider,
             api_key=cleanup_key,
@@ -812,6 +814,10 @@ class YapApp(rumps.App):
             self.cfg.cleanup.enabled
             and self.cfg.cleanup.provider == "mistral"
             and not self.cfg.mistral_api_key
+        ) or (
+            self.cfg.cleanup.enabled
+            and self.cfg.cleanup.provider == "cerebras"
+            and not self.cfg.cerebras_api_key
         )
         if missing_transcription_key or missing_cleanup_key:
             logger.warning("Required API key not set — opening Settings")

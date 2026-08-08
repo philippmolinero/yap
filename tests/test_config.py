@@ -37,6 +37,7 @@ class TestSecrets:
             [api_keys]
             mistral = "sk-test-mistral"
             groq = "gsk-test-groq"
+            cerebras = "csk-test-cerebras"
         """))
 
         with mock.patch("app.config.SECRETS_FILE", secrets_file):
@@ -46,6 +47,7 @@ class TestSecrets:
 
         assert keys["mistral"] == "sk-test-mistral"
         assert keys["groq"] == "gsk-test-groq"
+        assert keys["cerebras"] == "csk-test-cerebras"
 
     def test_load_secrets_handles_invalid_toml(self, tmp_path):
         secrets_file = tmp_path / "secrets.toml"
@@ -68,11 +70,16 @@ class TestSecrets:
              mock.patch("app.config.CONFIG_DIR", config_dir):
             from app.config import save_secrets
 
-            save_secrets(mistral_api_key="sk-abc", groq_api_key="gsk-xyz")
+            save_secrets(
+                mistral_api_key="sk-abc",
+                groq_api_key="gsk-xyz",
+                cerebras_api_key="csk-123",
+            )
 
         content = secrets_file.read_text()
         assert 'mistral = "sk-abc"' in content
         assert 'groq = "gsk-xyz"' in content
+        assert 'cerebras = "csk-123"' in content
 
     def test_save_secrets_file_permissions(self, tmp_path):
         secrets_file = tmp_path / "secrets.toml"
@@ -83,7 +90,11 @@ class TestSecrets:
              mock.patch("app.config.CONFIG_DIR", config_dir):
             from app.config import save_secrets
 
-            save_secrets(mistral_api_key="sk-abc", groq_api_key="gsk-xyz")
+            save_secrets(
+                mistral_api_key="sk-abc",
+                groq_api_key="gsk-xyz",
+                cerebras_api_key="csk-123",
+            )
 
         import stat
         mode = secrets_file.stat().st_mode
@@ -99,11 +110,16 @@ class TestSecrets:
              mock.patch("app.config.CONFIG_DIR", config_dir):
             from app.config import save_secrets, _load_secrets
 
-            save_secrets(mistral_api_key='key-with"quote', groq_api_key="key-with\\slash")
+            save_secrets(
+                mistral_api_key='key-with"quote',
+                groq_api_key="key-with\\slash",
+                cerebras_api_key="key-with-cerebras",
+            )
             keys, prefs = _load_secrets()
 
         assert keys["mistral"] == 'key-with"quote'
         assert keys["groq"] == "key-with\\slash"
+        assert keys["cerebras"] == "key-with-cerebras"
 
     def test_save_then_load_roundtrip(self, tmp_path):
         secrets_file = tmp_path / "secrets.toml"
@@ -114,11 +130,16 @@ class TestSecrets:
              mock.patch("app.config.CONFIG_DIR", config_dir):
             from app.config import save_secrets, _load_secrets
 
-            save_secrets(mistral_api_key="sk-roundtrip", groq_api_key="gsk-roundtrip")
+            save_secrets(
+                mistral_api_key="sk-roundtrip",
+                groq_api_key="gsk-roundtrip",
+                cerebras_api_key="csk-roundtrip",
+            )
             keys, prefs = _load_secrets()
 
         assert keys["mistral"] == "sk-roundtrip"
         assert keys["groq"] == "gsk-roundtrip"
+        assert keys["cerebras"] == "csk-roundtrip"
 
 
 class TestLoadConfig:
@@ -140,11 +161,13 @@ class TestLoadConfig:
             [api_keys]
             mistral = "sk-from-secrets"
             groq = "gsk-from-secrets"
+            cerebras = "csk-from-secrets"
         """))
 
         env = {
             "MISTRAL_API_KEY": "sk-from-env",
             "GROQ_API_KEY": "gsk-from-env",
+            "CEREBRAS_API_KEY": "csk-from-env",
         }
 
         with mock.patch("app.config.CONFIG_DIR", config_dir), \
@@ -158,6 +181,7 @@ class TestLoadConfig:
 
         assert cfg.mistral_api_key == "sk-from-secrets"
         assert cfg.groq_api_key == "gsk-from-secrets"
+        assert cfg.cerebras_api_key == "csk-from-secrets"
 
     def test_env_fallback_when_no_secrets(self, tmp_path):
         config_dir = tmp_path / "yap"
@@ -173,6 +197,7 @@ class TestLoadConfig:
         env = {
             "MISTRAL_API_KEY": "sk-from-env",
             "GROQ_API_KEY": "gsk-from-env",
+            "CEREBRAS_API_KEY": "csk-from-env",
         }
 
         with mock.patch("app.config.CONFIG_DIR", config_dir), \
@@ -186,6 +211,7 @@ class TestLoadConfig:
 
         assert cfg.mistral_api_key == "sk-from-env"
         assert cfg.groq_api_key == "gsk-from-env"
+        assert cfg.cerebras_api_key == "csk-from-env"
 
     def test_empty_secrets_falls_back_to_env(self, tmp_path):
         config_dir = tmp_path / "yap"
@@ -203,11 +229,13 @@ class TestLoadConfig:
             [api_keys]
             mistral = ""
             groq = ""
+            cerebras = ""
         """))
 
         env = {
             "MISTRAL_API_KEY": "sk-from-env",
             "GROQ_API_KEY": "gsk-from-env",
+            "CEREBRAS_API_KEY": "csk-from-env",
         }
 
         with mock.patch("app.config.CONFIG_DIR", config_dir), \
@@ -221,6 +249,7 @@ class TestLoadConfig:
 
         assert cfg.mistral_api_key == "sk-from-env"
         assert cfg.groq_api_key == "gsk-from-env"
+        assert cfg.cerebras_api_key == "csk-from-env"
 
     def test_config_defaults(self, tmp_path):
         """Config uses correct defaults when TOML is empty."""
@@ -249,6 +278,7 @@ class TestLoadConfig:
         assert cfg.cleanup.enabled is True
         assert cfg.cleanup.provider == "groq"
         assert cfg.cleanup.model == "meta-llama/llama-4-scout-17b-16e-instruct"
+        assert cfg.cerebras_api_key == ""
         assert cfg.paste.delay_ms == 50
         assert cfg.silence.timeout == 5.0
         assert cfg.silence.threshold == 0.008
@@ -257,6 +287,40 @@ class TestLoadConfig:
         assert cfg.thai_practice.prompt_id == "sentence-01"
         assert cfg.thai_practice.prompt_text == "ตอนนั้นฉันอายุเจ็ดขวบ"
         assert cfg.thai_practice.prompt_source == "learning-thai"
+
+    def test_cerebras_preference_selects_production_cleanup_model(self, tmp_path):
+        config_dir = tmp_path / "yap"
+        config_dir.mkdir()
+        config_file = config_dir / "config.toml"
+        secrets_file = config_dir / "secrets.toml"
+
+        shutil.copy(Path(__file__).parent.parent / "config" / "default.toml", config_file)
+        secrets_file.write_text(
+            textwrap.dedent(
+                """\
+                [api_keys]
+                mistral = ""
+                groq = ""
+                cerebras = "csk-from-secrets"
+
+                [preferences]
+                cleanup_provider = "cerebras"
+                """
+            )
+        )
+
+        with mock.patch("app.config.CONFIG_DIR", config_dir), \
+             mock.patch("app.config.CONFIG_FILE", config_file), \
+             mock.patch("app.config.SECRETS_FILE", secrets_file), \
+             mock.patch("app.config.VOCAB_FILE", config_dir / "vocabulary.txt"), \
+             mock.patch.dict(os.environ, {}, clear=True):
+            from app.config import load_config
+
+            cfg = load_config()
+
+        assert cfg.cerebras_api_key == "csk-from-secrets"
+        assert cfg.cleanup.provider == "cerebras"
+        assert cfg.cleanup.model == "gpt-oss-120b"
 
 class TestEnsureConfigDir:
     """Config dir creation and bundled file copying."""
