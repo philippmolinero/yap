@@ -77,6 +77,7 @@ class AppConfig:
     vocabulary: list[str] = field(default_factory=list)
     mistral_api_key: str = ""
     groq_api_key: str = ""
+    cerebras_api_key: str = ""
 
 
 def _ensure_config_dir():
@@ -118,12 +119,19 @@ def _escape_toml_string(s: str) -> str:
     return s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
 
-def save_secrets(*, mistral_api_key: str = "", groq_api_key: str = "", cleanup_provider: str = ""):
+def save_secrets(
+    *,
+    mistral_api_key: str = "",
+    groq_api_key: str = "",
+    cerebras_api_key: str = "",
+    cleanup_provider: str = "",
+):
     """Save API keys and preferences to secrets.toml."""
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     content = "[api_keys]\n"
     content += f'mistral = "{_escape_toml_string(mistral_api_key)}"\n'
     content += f'groq = "{_escape_toml_string(groq_api_key)}"\n'
+    content += f'cerebras = "{_escape_toml_string(cerebras_api_key)}"\n'
     if cleanup_provider:
         content += "\n[preferences]\n"
         content += f'cleanup_provider = "{_escape_toml_string(cleanup_provider)}"\n'
@@ -152,6 +160,7 @@ def load_config() -> AppConfig:
     secrets, preferences = _load_secrets()
     mistral_key = secrets.get("mistral", "") or os.environ.get("MISTRAL_API_KEY", "")
     groq_key = secrets.get("groq", "") or os.environ.get("GROQ_API_KEY", "")
+    cerebras_key = secrets.get("cerebras", "") or os.environ.get("CEREBRAS_API_KEY", "")
 
     cleanup_cfg = CleanupConfig(**cleanup_raw)
 
@@ -159,17 +168,22 @@ def load_config() -> AppConfig:
     pref_provider = preferences.get("cleanup_provider", "")
     if pref_provider == "disabled":
         cleanup_cfg.enabled = False
-    elif pref_provider in ("groq", "mistral"):
+    elif pref_provider in ("groq", "mistral", "cerebras"):
         cleanup_cfg.provider = pref_provider
         if pref_provider == "mistral":
             cleanup_cfg.model = "mistral-small-latest"
         elif pref_provider == "groq":
             cleanup_cfg.model = "meta-llama/llama-4-scout-17b-16e-instruct"
+        elif pref_provider == "cerebras":
+            cleanup_cfg.model = "gpt-oss-120b"
     elif not pref_provider:
-        # Smart default: no explicit preference, no Groq key, but Mistral key → use Mistral
+        # Smart default: prefer the configured cleanup provider when no preference is saved.
         if not groq_key and mistral_key:
             cleanup_cfg.provider = "mistral"
             cleanup_cfg.model = "mistral-small-latest"
+        elif not groq_key and not mistral_key and cerebras_key:
+            cleanup_cfg.provider = "cerebras"
+            cleanup_cfg.model = "gpt-oss-120b"
 
     return AppConfig(
         hotkey=HotkeyConfig(**hotkey_raw),
@@ -181,6 +195,7 @@ def load_config() -> AppConfig:
         vocabulary=_load_vocabulary(),
         mistral_api_key=mistral_key,
         groq_api_key=groq_key,
+        cerebras_api_key=cerebras_key,
     )
 
 
@@ -193,3 +208,4 @@ if __name__ == "__main__":
     print(f"Vocabulary: {cfg.vocabulary}")
     print(f"Mistral key: {'set' if cfg.mistral_api_key else 'missing'}")
     print(f"Groq key: {'set' if cfg.groq_api_key else 'missing'}")
+    print(f"Cerebras key: {'set' if cfg.cerebras_api_key else 'missing'}")

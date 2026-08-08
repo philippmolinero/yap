@@ -43,12 +43,15 @@ class TestSettingsDialogInit:
             mock_field_mistral.stringValue.return_value = "sk-test-123"
             mock_field_groq = mock.Mock()
             mock_field_groq.stringValue.return_value = "gsk-test-456"
+            mock_field_cerebras = mock.Mock()
+            mock_field_cerebras.stringValue.return_value = "csk-test-789"
             mock_cleanup_popup = mock.Mock()
             mock_cleanup_popup.titleOfSelectedItem.return_value = "Groq (Fast)"
             mock_window = mock.Mock()
 
             dialog._mistral_field = mock_field_mistral
             dialog._groq_field = mock_field_groq
+            dialog._cerebras_field = mock_field_cerebras
             dialog._cleanup_popup = mock_cleanup_popup
             dialog._window = mock_window
 
@@ -57,6 +60,7 @@ class TestSettingsDialogInit:
         mock_save.assert_called_once_with(
             mistral_api_key="sk-test-123",
             groq_api_key="gsk-test-456",
+            cerebras_api_key="csk-test-789",
             cleanup_provider="groq",
         )
         # Window title changes to "Saved!" as confirmation
@@ -144,3 +148,13 @@ class TestSettingsController:
 
         controller.pasteGroqClicked_(None)
         mock_dialog._paste_into_field.assert_called_once_with(mock_dialog._groq_field)
+
+    def test_controller_delegates_cerebras_paste(self):
+        from app.settings_dialog import _SettingsController
+
+        mock_dialog = mock.Mock()
+        mock_dialog._cerebras_field = mock.Mock()
+        controller = _SettingsController.alloc().initWithDialog_(mock_dialog)
+
+        controller.pasteCerebrasClicked_(None)
+        mock_dialog._paste_into_field.assert_called_once_with(mock_dialog._cerebras_field)

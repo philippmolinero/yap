@@ -442,7 +442,11 @@ if __name__ == "__main__":
     )
     cleanup = create_cleanup(
         provider=cfg.cleanup.provider,
-        api_key=cfg.groq_api_key,
+        api_key={
+            "groq": cfg.groq_api_key,
+            "mistral": cfg.mistral_api_key,
+            "cerebras": cfg.cerebras_api_key,
+        }.get(cfg.cleanup.provider, ""),
         model=cfg.cleanup.model,
         enabled=cfg.cleanup.enabled,
     )
