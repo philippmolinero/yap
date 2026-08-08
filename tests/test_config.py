@@ -322,6 +322,49 @@ class TestLoadConfig:
         assert cfg.cleanup.provider == "cerebras"
         assert cfg.cleanup.model == "gpt-oss-120b"
 
+    def test_cerebras_preference_preserves_explicit_model(self, tmp_path):
+        config_dir = tmp_path / "yap"
+        config_dir.mkdir()
+        config_file = config_dir / "config.toml"
+        secrets_file = config_dir / "secrets.toml"
+        config_file.write_text(
+            "[cleanup]\nprovider = \"groq\"\nmodel = \"gemma-4-31b\"\n"
+        )
+        secrets_file.write_text(
+            "[api_keys]\ncerebras = \"csk-from-secrets\"\n\n[preferences]\ncleanup_provider = \"cerebras\"\n"
+        )
+
+        with mock.patch("app.config.CONFIG_DIR", config_dir), \
+             mock.patch("app.config.CONFIG_FILE", config_file), \
+             mock.patch("app.config.SECRETS_FILE", secrets_file), \
+             mock.patch("app.config.VOCAB_FILE", config_dir / "vocabulary.txt"), \
+             mock.patch.dict(os.environ, {}, clear=True):
+            from app.config import load_config
+
+            cfg = load_config()
+
+        assert cfg.cleanup.provider == "cerebras"
+        assert cfg.cleanup.model == "gemma-4-31b"
+
+    def test_cerebras_key_does_not_change_default_provider(self, tmp_path):
+        config_dir = tmp_path / "yap"
+        config_dir.mkdir()
+        config_file = config_dir / "config.toml"
+        secrets_file = config_dir / "secrets.toml"
+        shutil.copy(Path(__file__).parent.parent / "config" / "default.toml", config_file)
+        secrets_file.write_text("[api_keys]\ncerebras = \"csk-from-secrets\"\n")
+
+        with mock.patch("app.config.CONFIG_DIR", config_dir), \
+             mock.patch("app.config.CONFIG_FILE", config_file), \
+             mock.patch("app.config.SECRETS_FILE", secrets_file), \
+             mock.patch("app.config.VOCAB_FILE", config_dir / "vocabulary.txt"), \
+             mock.patch.dict(os.environ, {}, clear=True):
+            from app.config import load_config
+
+            cfg = load_config()
+
+        assert cfg.cleanup.provider == "groq"
+
 class TestEnsureConfigDir:
     """Config dir creation and bundled file copying."""
 

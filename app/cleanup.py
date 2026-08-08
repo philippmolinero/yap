@@ -1,8 +1,10 @@
 """LLM-based transcript cleanup module."""
 
 import logging
+import random
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import httpx
@@ -11,6 +13,8 @@ logger = logging.getLogger(__name__)
 
 CEREBRAS_CHAT_COMPLETIONS_URL = "https://api.cerebras.ai/v1/chat/completions"
 CEREBRAS_DEFAULT_MODEL = "gpt-oss-120b"
+CEREBRAS_MAX_COMPLETION_TOKENS = 2048
+CEREBRAS_MAX_RETRIES = 2
 
 CLEANUP_PROMPT = (
     "You are a deterministic dictation post-processor. The user message contains a raw "
@@ -74,6 +78,14 @@ def _looks_like_meta_response(text: str) -> bool:
     return any(marker in normalized for marker in _META_RESPONSE_MARKERS)
 
 
+def _completion_budget(text: str) -> int:
+    """Reserve a bounded output budget appropriate for a short transcript."""
+    # Cerebras reserves input plus max_completion_tokens before serving a request.
+    # Two characters per output token is deliberately generous for dictation while
+    # retaining the existing hard ceiling for unusually long recordings.
+    return min(CEREBRAS_MAX_COMPLETION_TOKENS, max(256, len(text) // 2 + 128))
+
+
 class GroqCleanup(CleanupProvider):
     """Cleanup via Groq."""
 
@@ -112,10 +124,12 @@ class CerebrasCleanup(CleanupProvider):
         api_key: str,
         model: str = CEREBRAS_DEFAULT_MODEL,
         client: httpx.Client | None = None,
+        sleep: Callable[[float], None] | None = None,
     ):
         self.api_key = api_key
         self.model = model
         self._client = client or httpx.Client(timeout=30.0)
+        self._sleep = sleep or time.sleep
 
     @staticmethod
     def _reasoning_effort(model: str) -> str | None:
@@ -136,21 +150,63 @@ class CerebrasCleanup(CleanupProvider):
                 {"role": "user", "content": _cleanup_user_message(text, language)},
             ],
             "temperature": 0,
-            "max_completion_tokens": 2048,
+            "max_completion_tokens": _completion_budget(text),
         }
         reasoning_effort = self._reasoning_effort(self.model)
         if reasoning_effort:
             payload["reasoning_effort"] = reasoning_effort
 
-        response = self._client.post(
-            CEREBRAS_CHAT_COMPLETIONS_URL,
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-        )
-        response.raise_for_status()
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        response = None
+        for attempt in range(CEREBRAS_MAX_RETRIES + 1):
+            try:
+                response = self._client.post(
+                    CEREBRAS_CHAT_COMPLETIONS_URL,
+                    headers=headers,
+                    json=payload,
+                )
+                response.raise_for_status()
+                break
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code
+                retryable = status == 429 or status >= 500
+                if not retryable or attempt >= CEREBRAS_MAX_RETRIES:
+                    logger.error(
+                        "Cerebras cleanup request failed [provider=cerebras model=%s status=%s attempt=%d]",
+                        self.model,
+                        status,
+                        attempt + 1,
+                    )
+                    raise
+                delay = min(1.0, 0.1 * (2**attempt) + random.uniform(0, 0.1))
+                logger.warning(
+                    "Cerebras cleanup retry [provider=cerebras model=%s status=%s attempt=%d delay=%.2fs]",
+                    self.model,
+                    status,
+                    attempt + 1,
+                    delay,
+                )
+                self._sleep(delay)
+            except httpx.RequestError:
+                if attempt >= CEREBRAS_MAX_RETRIES:
+                    logger.error(
+                        "Cerebras cleanup request failed [provider=cerebras model=%s status=network attempt=%d]",
+                        self.model,
+                        attempt + 1,
+                    )
+                    raise
+                delay = min(1.0, 0.1 * (2**attempt) + random.uniform(0, 0.1))
+                logger.warning(
+                    "Cerebras cleanup retry [provider=cerebras model=%s status=network attempt=%d delay=%.2fs]",
+                    self.model,
+                    attempt + 1,
+                    delay,
+                )
+                self._sleep(delay)
+        assert response is not None
         body = response.json()
         choices = body.get("choices") or []
         if not choices:
