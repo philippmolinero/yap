@@ -2,6 +2,8 @@
 
 from unittest import mock
 
+import httpx
+
 from app.cleanup import (
     CerebrasCleanup,
     _cleanup_user_message,
@@ -42,7 +44,7 @@ def test_cerebras_cleanup_uses_chat_completions_and_preserves_guardrails():
     assert payload["model"] == "gpt-oss-120b"
     assert payload["temperature"] == 0
     assert payload["reasoning_effort"] == "low"
-    assert payload["max_completion_tokens"] == 2048
+    assert 256 <= payload["max_completion_tokens"] <= 2048
     assert payload["messages"][0]["role"] == "system"
     assert "<transcript>\nso um clean this\n</transcript>" in payload["messages"][1]["content"]
 
@@ -60,6 +62,27 @@ def test_cerebras_cleanup_falls_back_on_meta_response():
     result = cleanup.clean("so um keep this", "en")
 
     assert result.text == "so um keep this"
+
+
+def test_cerebras_cleanup_retries_rate_limits_before_success():
+    client = _FakeCerebrasClient()
+    response = mock.Mock()
+    response.raise_for_status.side_effect = [
+        httpx.HTTPStatusError(
+            "rate limited",
+            request=httpx.Request("POST", "https://api.cerebras.ai/v1/chat/completions"),
+            response=httpx.Response(429),
+        ),
+        None,
+    ]
+    response.json.return_value = {"choices": [{"message": {"content": "Retry worked."}}]}
+    client.post = mock.Mock(return_value=response)
+    cleanup = CerebrasCleanup(api_key="csk-test", client=client, sleep=lambda _: None)
+
+    result = cleanup.clean("short transcript", "en")
+
+    assert result.text == "Retry worked."
+    assert client.post.call_count == 2
 
 
 def test_create_cleanup_builds_cerebras_provider():

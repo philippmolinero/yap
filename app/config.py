@@ -175,15 +175,20 @@ def load_config() -> AppConfig:
         elif pref_provider == "groq":
             cleanup_cfg.model = "meta-llama/llama-4-scout-17b-16e-instruct"
         elif pref_provider == "cerebras":
-            cleanup_cfg.model = "gpt-oss-120b"
+            # Keep a manually configured Cerebras model (for example Gemma) while
+            # replacing the bundled Groq model with Cerebras' production default.
+            if cleanup_cfg.model in {
+                "",
+                "meta-llama/llama-4-scout-17b-16e-instruct",
+                "mistral-small-latest",
+            }:
+                cleanup_cfg.model = "gpt-oss-120b"
     elif not pref_provider:
-        # Smart default: prefer the configured cleanup provider when no preference is saved.
+        # Keep the bundled Groq default until the user explicitly selects another
+        # provider in Settings. Merely exporting a trial key must not change behavior.
         if not groq_key and mistral_key:
             cleanup_cfg.provider = "mistral"
             cleanup_cfg.model = "mistral-small-latest"
-        elif not groq_key and not mistral_key and cerebras_key:
-            cleanup_cfg.provider = "cerebras"
-            cleanup_cfg.model = "gpt-oss-120b"
 
     return AppConfig(
         hotkey=HotkeyConfig(**hotkey_raw),
