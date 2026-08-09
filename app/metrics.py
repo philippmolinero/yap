@@ -35,6 +35,11 @@ class PipelineMeasurement:
     success: bool
     error: str = ""
     fallback_reason: str = ""
+    cleanup_finish_reason: str = ""
+    cleanup_attempts: int = 0
+    cleanup_request_attempts: int = 0
+    cleanup_status_code: int | None = None
+    cleanup_retry_statuses: tuple[int, ...] = ()
     timestamp: str = ""
 
     def as_dict(self) -> dict:

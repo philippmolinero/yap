@@ -23,6 +23,11 @@ def test_metrics_writer_appends_redacted_jsonl(tmp_path):
         language="en",
         text_chars=128,
         success=True,
+        cleanup_finish_reason="stop",
+        cleanup_attempts=2,
+        cleanup_request_attempts=3,
+        cleanup_status_code=200,
+        cleanup_retry_statuses=(429,),
     )
 
     writer.append(measurement)
@@ -31,6 +36,10 @@ def test_metrics_writer_appends_redacted_jsonl(tmp_path):
     assert record["recording_id"] == 7
     assert record["cleanup_provider"] == "cerebras"
     assert record["total_s"] == 1.21
+    assert record["cleanup_finish_reason"] == "stop"
+    assert record["cleanup_request_attempts"] == 3
+    assert record["cleanup_status_code"] == 200
+    assert record["cleanup_retry_statuses"] == [429]
     assert "text" not in record
     assert "transcript" not in record
     assert oct(path.stat().st_mode & 0o777) == "0o600"

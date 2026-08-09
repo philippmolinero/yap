@@ -6,14 +6,14 @@ This note records the implementation boundary for the six Yap follow-up tasks.
 
 ## Implemented in the current source tree
 
-- Cleanup responses are treated as untrusted transcript data. The prompt forbids answering or summarizing the dictated text and requires the complete transcript to survive.
+- Cleanup responses are treated as untrusted transcript data. The prompt forbids answering or summarizing the dictated text, JSON-escapes markup inside the transcript frame, and requires the complete transcript to survive.
 - Cerebras cleanup starts with a bounded completion budget, retries transient HTTP/network failures, retries a length-truncated completion with a larger bound, and pastes the raw transcript if the response is still incomplete or meta-text.
-- Cleanup results now carry provider, model, finish reason, attempt count, and fallback reason. Pipeline logs record those diagnostics without transcript content.
+- Cleanup results now carry provider, model, finish reason, completion attempts, HTTP request attempts, final response status, recovered transient statuses, and fallback reason. Pipeline logs and transcript-free JSONL measurements record those diagnostics without transcript content.
 - The bundled Groq cleanup model was moved from retired Llama 4 Scout to production `openai/gpt-oss-120b`; existing installs migrate the retired ID in memory.
 - Settings now persists the cleanup model alongside the provider, so `gpt-oss-120b`, Gemma, and other explicitly configured models are not silently overwritten.
 - Groq Whisper requests now use `temperature=0`, the configured vocabulary as a short spelling prompt, and `verbose_json` quality metadata. An optional `[transcription].language` ISO-639-1 hint is available for single-language workflows; blank keeps automatic detection. The existing language guard remains in place.
-- The app writes mode-0600, transcript-free stage measurements to `~/.config/yap/pipeline_metrics.jsonl`. Each record includes audio duration, recorder-stop time, ASR time, cleanup time, total time, provider/model IDs, language, character count, and error/fallback reasons.
-- The benchmark harness now has a deterministic 50-case English/German cleanup corpus, p50/p95 latency, quality similarity, error/fallback counts, and an optional JSON corpus input for real recordings.
+- The app writes mode-0600, transcript-free stage measurements to `~/.config/yap/pipeline_metrics.jsonl`. Each record includes audio duration, recorder-stop time, ASR time, cleanup time, total/release-to-paste time, provider/model IDs, language, character count, cleanup finish/status/attempt diagnostics, and error/fallback reasons.
+- The benchmark harness now has a deterministic 50-case English/German cleanup corpus covering short and long dictation, names/acronyms, questions, literal quoted instructions, mixed language, prompt-injection-shaped speech, and dropped-suffix regressions. It records p50/p95 provider and wall-clock proxy latency, real cold/warm client reuse, quality similarity with punctuation preserved, exact meaningful-word preservation, error/fallback/final-and-recovered-status counts, conservative answer/summarization/translation flags, and current first-party cost estimates. An optional JSON corpus input supports real recordings.
 
 ## ASR quality boundary
 
@@ -42,4 +42,4 @@ The current product requirement is final dictation pasted after release, not liv
 
 ## Promotion gate
 
-Do not change the default cleanup or ASR provider from these code changes alone. Promote a model only after a representative corpus shows acceptable meaningful-word preservation, punctuation, prompt-shaped dictation handling, p50/p95 release-to-paste latency, fallback/error rate, and cost. The local measurements are the authoritative evidence; advertised tokens-per-second figures are not.
+Do not change the default cleanup or ASR provider from these code changes alone. Promote a model only after a representative corpus shows acceptable meaningful-word preservation, punctuation, prompt-shaped dictation handling, p50/p95 release-to-paste latency, fallback/error/status rate, and cost. The app's local `pipeline_metrics.jsonl` is authoritative for true release-to-paste timing; benchmark wall-clock values are a provider-call proxy when stages are run separately. Advertised tokens-per-second figures are not evidence.

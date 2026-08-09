@@ -129,20 +129,20 @@ Build a fixed, local corpus of at least 50 representative English and German tra
 - mixed-language utterances
 - cases that previously triggered meta-responses or dropped sentences
 
-Run Groq, Cerebras GPT OSS, and optionally Gemma 4 against identical prompts. Record:
+Run Groq, Cerebras GPT OSS, and Gemma 4 against identical prompts. Yap's benchmark corpus now contains 50 deterministic cases spanning short/long dictation, names/acronyms, questions, mixed language, quoted and prompt-injection-shaped speech, and prior suffix/meta failures. Record:
 
 - exact meaningful-word preservation
 - correct filler/stutter removal
 - punctuation/question-mark correctness
 - unexpected answering, summarization, translation, or meta-response rate
-- p50/p95 provider latency and release-to-paste latency
-- warm/cold behavior, 429/5xx rate, and cost
+- p50/p95 provider latency and the benchmark's wall-clock release-to-paste proxy; use Yap's local JSONL for true hotkey-release-to-paste timing
+- warm/cold behavior, final and recovered response status (including 429/5xx rate), estimated cost from current first-party price tables, and conservative unexpected-answer/summarization/translation flags
 
 Promotion gate: Cerebras should become default only if it is at least as faithful as Groq and materially improves p95 release-to-paste latency without raising fallback/error frequency. Peak TPS alone is not sufficient.
 
 ### 4. Make fallback behavior explicit
 
-For provider/network failures, preserve the raw transcript rather than delaying paste through a second slow cloud call. If an automatic secondary provider is added, make it optional and bounded to one attempt. Record provider, model, latency, response status, and fallback reason in local logs, but never transcript content or keys.
+For provider/network failures, preserve the raw transcript rather than delaying paste through a second slow cloud call. If an automatic secondary provider is added, make it optional and bounded to one attempt. Record provider, model, latency, final/recovered response status, finish reason, request/completion attempts, and fallback reason in local logs, but never transcript content or keys.
 
 ### 5. Use live model discovery for diagnostics, not silent model switching
 
