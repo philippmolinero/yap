@@ -85,6 +85,11 @@ class Pipeline:
         success: bool,
         error: str = "",
         fallback_reason: str = "",
+        cleanup_finish_reason: str = "",
+        cleanup_attempts: int = 0,
+        cleanup_request_attempts: int = 0,
+        cleanup_status_code: int | None = None,
+        cleanup_retry_statuses: tuple[int, ...] = (),
     ) -> None:
         transcription_provider, transcription_model = self._provider_details(self.transcriber)
         cleanup_provider, cleanup_model = self._provider_details(self.cleanup)
@@ -105,6 +110,11 @@ class Pipeline:
             success=success,
             error=error,
             fallback_reason=fallback_reason,
+            cleanup_finish_reason=cleanup_finish_reason,
+            cleanup_attempts=cleanup_attempts,
+            cleanup_request_attempts=cleanup_request_attempts,
+            cleanup_status_code=cleanup_status_code,
+            cleanup_retry_statuses=cleanup_retry_statuses,
         )
         if self._metrics_writer is not None:
             self._metrics_writer.append(measurement)
@@ -386,16 +396,32 @@ class Pipeline:
         cleanup_elapsed = None
         cleanup_fallback_reason = ""
         cleanup_error = ""
+        cleanup_finish_reason = ""
+        cleanup_attempts = 0
+        cleanup_request_attempts = 0
+        cleanup_status_code = None
+        cleanup_retry_statuses: tuple[int, ...] = ()
         t_cleanup = time.perf_counter()
         try:
             cleanup_result = self.cleanup.clean(text, result.language)
             text = cleanup_result.text
             cleanup_elapsed = time.perf_counter() - t_cleanup
             cleanup_fallback_reason = getattr(cleanup_result, "fallback_reason", "")
+            cleanup_finish_reason = getattr(cleanup_result, "finish_reason", "")
+            cleanup_attempts = int(getattr(cleanup_result, "attempts", 0) or 0)
+            cleanup_request_attempts = int(getattr(cleanup_result, "request_attempts", 0) or 0)
+            cleanup_status_code = getattr(cleanup_result, "status_code", None)
+            cleanup_retry_statuses = tuple(getattr(cleanup_result, "retry_statuses", ()) or ())
             logger.info(
-                "Cleaned (%.2fs provider=%.2fs fallback=%s) [provider=%s model=%s recording=%s text_chars=%d]",
+                "Cleaned (%.2fs provider=%.2fs finish=%s attempts=%d requests=%d status=%s retries=%s fallback=%s) "
+                "[provider=%s model=%s recording=%s text_chars=%d]",
                 cleanup_result.latency,
                 cleanup_elapsed,
+                cleanup_finish_reason or "none",
+                cleanup_attempts,
+                cleanup_request_attempts,
+                cleanup_status_code or "none",
+                ",".join(str(status) for status in cleanup_retry_statuses) or "none",
                 cleanup_fallback_reason or "none",
                 getattr(cleanup_result, "provider", "") or self._provider_details(self.cleanup)[0],
                 getattr(cleanup_result, "model", "") or self._provider_details(self.cleanup)[1],
@@ -406,6 +432,11 @@ class Pipeline:
             cleanup_elapsed = time.perf_counter() - t_cleanup
             cleanup_fallback_reason = "cleanup_exception"
             cleanup_error = self._exception_code("cleanup", exc)
+            cleanup_status_code = getattr(
+                getattr(exc, "response", None),
+                "status_code",
+                getattr(exc, "status_code", None),
+            )
             logger.exception(
                 "Cleanup failed, using raw transcript [provider=%s model=%s recording=%s]",
                 self._provider_details(self.cleanup)[0],
@@ -454,6 +485,11 @@ class Pipeline:
             success=not paste_failed,
             error=cleanup_error or ("paste_failed" if paste_failed else ""),
             fallback_reason=cleanup_fallback_reason,
+            cleanup_finish_reason=cleanup_finish_reason,
+            cleanup_attempts=cleanup_attempts,
+            cleanup_request_attempts=cleanup_request_attempts,
+            cleanup_status_code=cleanup_status_code,
+            cleanup_retry_statuses=cleanup_retry_statuses,
         )
 
         self._set_state(

@@ -5,7 +5,7 @@ import time
 from types import SimpleNamespace
 
 import app.pipeline as pipeline_module
-from app.cleanup import NoopCleanup
+from app.cleanup import CleanupResult, NoopCleanup
 
 
 class _FakeRecorder:
@@ -166,6 +166,46 @@ def test_cancel_recording_aborts_active_recorder(monkeypatch):
         pipeline_module.PipelineState.RECORDING,
         pipeline_module.PipelineState.IDLE,
     ]
+
+
+def test_pipeline_measurement_carries_cleanup_diagnostics(monkeypatch):
+    class _DiagnosticCleanup:
+        provider = "cerebras"
+        model = "gpt-oss-120b"
+
+        def clean(self, text, language=""):
+            return CleanupResult(
+                text="cleaned text",
+                latency=0.12,
+                provider=self.provider,
+                model=self.model,
+                finish_reason="stop",
+                attempts=2,
+                request_attempts=3,
+                status_code=200,
+                retry_statuses=(429,),
+            )
+
+    recorder = _FakeRecorder()
+    measurements = []
+    monkeypatch.setattr(pipeline_module, "paste", lambda text, delay_ms=0: None)
+    pipeline = pipeline_module.Pipeline(
+        recorder=recorder,
+        transcriber=_FakeTranscriber(),
+        cleanup=_DiagnosticCleanup(),
+        paste_delay_ms=0,
+        on_measurement=measurements.append,
+    )
+
+    assert pipeline.start_recording(source="hotkey_down") is True
+    assert pipeline.stop_recording_and_process(source="hotkey_up") is True
+
+    measurement = measurements[-1]
+    assert measurement.cleanup_finish_reason == "stop"
+    assert measurement.cleanup_attempts == 2
+    assert measurement.cleanup_request_attempts == 3
+    assert measurement.cleanup_status_code == 200
+    assert measurement.cleanup_retry_statuses == (429,)
 
 
 def test_start_failure_leaves_pipeline_idle(monkeypatch):
