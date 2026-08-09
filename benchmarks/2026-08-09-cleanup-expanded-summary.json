@@ -24,6 +24,8 @@
       "meaningful_words_exact_rate": 0.94,
       "p50_latency_s": 0.4454,
       "p95_latency_s": 1.5571,
+      "p50_release_to_paste_s": 0.4454,
+      "p95_release_to_paste_s": 1.5571,
       "cold_p50_latency_s": 0.5167,
       "warm_p50_latency_s": 0.4448,
       "estimated_cost_usd": 0.02616,
@@ -33,6 +35,8 @@
       "summarization_rate": 0.0,
       "translation_rate": 0.0,
       "punctuation_mismatch_rate": 0.0
+      ,"dropped_suffix_rate": 0.0,
+      "rate_limit_or_server_errors": 0
     },
     {
       "provider": "cerebras",
@@ -45,6 +49,8 @@
       "meaningful_words_exact_rate": 1.0,
       "p50_latency_s": 0.4137,
       "p95_latency_s": 0.5974,
+      "p50_release_to_paste_s": 0.4137,
+      "p95_release_to_paste_s": 0.5974,
       "cold_p50_latency_s": 0.6732,
       "warm_p50_latency_s": 0.4137,
       "estimated_cost_usd": 0.00954,
@@ -54,6 +60,8 @@
       "summarization_rate": 0.0,
       "translation_rate": 0.0,
       "punctuation_mismatch_rate": 0.0
+      ,"dropped_suffix_rate": 0.0,
+      "rate_limit_or_server_errors": 0
     },
     {
       "provider": "groq",
@@ -66,6 +74,8 @@
       "meaningful_words_exact_rate": 1.0,
       "p50_latency_s": 3.3003,
       "p95_latency_s": 6.2566,
+      "p50_release_to_paste_s": 3.3004,
+      "p95_release_to_paste_s": 6.2566,
       "cold_p50_latency_s": 0.8792,
       "warm_p50_latency_s": 3.3284,
       "estimated_cost_usd": 0.00446,
@@ -75,6 +85,8 @@
       "summarization_rate": 0.0,
       "translation_rate": 0.0,
       "punctuation_mismatch_rate": 0.0
+      ,"dropped_suffix_rate": 0.0,
+      "rate_limit_or_server_errors": 0
     },
     {
       "provider": "mistral",
@@ -87,6 +99,8 @@
       "meaningful_words_exact_rate": 0.94,
       "p50_latency_s": 0.5689,
       "p95_latency_s": 0.7884,
+      "p50_release_to_paste_s": 0.5689,
+      "p95_release_to_paste_s": 0.7885,
       "cold_p50_latency_s": 2.6336,
       "warm_p50_latency_s": 0.5681,
       "estimated_cost_usd": 0.00441,
@@ -96,6 +110,8 @@
       "summarization_rate": 0.06,
       "translation_rate": 0.0,
       "punctuation_mismatch_rate": 0.02
+      ,"dropped_suffix_rate": 0.0,
+      "rate_limit_or_server_errors": 0
     }
   ]
 }
