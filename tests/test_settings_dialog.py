@@ -62,9 +62,38 @@ class TestSettingsDialogInit:
             groq_api_key="gsk-test-456",
             cerebras_api_key="csk-test-789",
             cleanup_provider="groq",
+            cleanup_model="openai/gpt-oss-120b",
         )
         # Window title changes to "Saved!" as confirmation
         mock_window.setTitle_.assert_called_with("Saved!")
+
+    def test_do_save_persists_explicit_cleanup_model(self):
+        with mock.patch("app.settings_dialog.save_secrets") as mock_save, \
+             mock.patch("app.settings_dialog.AppKit") as mock_appkit:
+            from app.settings_dialog import SettingsDialog
+
+            dialog = SettingsDialog()
+            dialog._mistral_field = mock.Mock()
+            dialog._mistral_field.stringValue.return_value = ""
+            dialog._groq_field = mock.Mock()
+            dialog._groq_field.stringValue.return_value = ""
+            dialog._cerebras_field = mock.Mock()
+            dialog._cerebras_field.stringValue.return_value = "csk-test"
+            dialog._cleanup_popup = mock.Mock()
+            dialog._cleanup_popup.titleOfSelectedItem.return_value = "Cerebras (GPT-OSS)"
+            dialog._cleanup_model_field = mock.Mock()
+            dialog._cleanup_model_field.stringValue.return_value = "gemma-4-31b"
+            dialog._window = mock.Mock()
+
+            dialog._do_save()
+
+        mock_save.assert_called_once_with(
+            mistral_api_key="",
+            groq_api_key="",
+            cerebras_api_key="csk-test",
+            cleanup_provider="cerebras",
+            cleanup_model="gemma-4-31b",
+        )
 
     def test_do_cancel_closes_window(self):
         from app.settings_dialog import SettingsDialog

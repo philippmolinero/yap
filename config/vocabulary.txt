@@ -4,4 +4,8 @@ Anthropic
 Voxtral
 Mistral
 Groq
+Cerebras
+Yap
+GPT-OSS
+Voxtral Realtime
 geisteskrank

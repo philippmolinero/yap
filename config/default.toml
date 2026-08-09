@@ -6,6 +6,7 @@ double_tap_ms = 300
 [transcription]
 provider = "groq"
 model = "whisper-large-v3-turbo"
+language = ""                  # Optional ISO-639-1 hint; blank keeps automatic detection
 sample_rate = 16000
 allowed_languages = ["en", "de"]
 fallback_languages = ["de", "en"]
@@ -13,7 +14,7 @@ fallback_languages = ["de", "en"]
 [cleanup]
 enabled = true
 provider = "groq"
-model = "meta-llama/llama-4-scout-17b-16e-instruct"
+model = "openai/gpt-oss-120b"
 
 [paste]
 delay_ms = 50

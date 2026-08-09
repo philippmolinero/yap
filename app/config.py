@@ -34,6 +34,7 @@ class HotkeyConfig:
 class TranscriptionConfig:
     provider: str = "groq"
     model: str = "whisper-large-v3-turbo"
+    language: str = ""  # Optional ISO-639-1 hint; blank keeps automatic detection.
     sample_rate: int = 16000
     allowed_languages: list[str] = field(default_factory=lambda: ["en", "de"])
     fallback_languages: list[str] = field(default_factory=lambda: ["de", "en"])
@@ -43,7 +44,7 @@ class TranscriptionConfig:
 class CleanupConfig:
     enabled: bool = True
     provider: str = "groq"
-    model: str = "meta-llama/llama-4-scout-17b-16e-instruct"
+    model: str = "openai/gpt-oss-120b"
 
 
 @dataclass
@@ -125,6 +126,7 @@ def save_secrets(
     groq_api_key: str = "",
     cerebras_api_key: str = "",
     cleanup_provider: str = "",
+    cleanup_model: str = "",
 ):
     """Save API keys and preferences to secrets.toml."""
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -135,6 +137,8 @@ def save_secrets(
     if cleanup_provider:
         content += "\n[preferences]\n"
         content += f'cleanup_provider = "{_escape_toml_string(cleanup_provider)}"\n'
+        if cleanup_model:
+            content += f'cleanup_model = "{_escape_toml_string(cleanup_model)}"\n'
     SECRETS_FILE.write_text(content)
     SECRETS_FILE.chmod(0o600)
 
@@ -164,22 +168,38 @@ def load_config() -> AppConfig:
 
     cleanup_cfg = CleanupConfig(**cleanup_raw)
 
+    # Groq retired Llama 4 Scout on 2026-07-17.  Existing Yap installs keep a
+    # user config file, so migrate that one known obsolete model in memory
+    # instead of letting every dictation fail with a 404 after an update.
+    if cleanup_cfg.provider == "groq" and cleanup_cfg.model in {
+        "meta-llama/llama-4-scout-17b-16e-instruct",
+    }:
+        logger.warning(
+            "Migrating retired Groq cleanup model %s to openai/gpt-oss-120b",
+            cleanup_cfg.model,
+        )
+        cleanup_cfg.model = "openai/gpt-oss-120b"
+
     # Apply explicit preference from secrets.toml
     pref_provider = preferences.get("cleanup_provider", "")
+    pref_model = preferences.get("cleanup_model", "")
     if pref_provider == "disabled":
         cleanup_cfg.enabled = False
     elif pref_provider in ("groq", "mistral", "cerebras"):
         cleanup_cfg.provider = pref_provider
-        if pref_provider == "mistral":
+        if pref_model:
+            cleanup_cfg.model = pref_model
+        elif pref_provider == "mistral":
             cleanup_cfg.model = "mistral-small-latest"
         elif pref_provider == "groq":
-            cleanup_cfg.model = "meta-llama/llama-4-scout-17b-16e-instruct"
+            cleanup_cfg.model = "openai/gpt-oss-120b"
         elif pref_provider == "cerebras":
             # Keep a manually configured Cerebras model (for example Gemma) while
             # replacing the bundled Groq model with Cerebras' production default.
             if cleanup_cfg.model in {
                 "",
                 "meta-llama/llama-4-scout-17b-16e-instruct",
+                "openai/gpt-oss-120b",
                 "mistral-small-latest",
             }:
                 cleanup_cfg.model = "gpt-oss-120b"
