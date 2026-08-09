@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Callable
 
 from app.cleanup import CleanupProvider
+from app.metrics import MetricsWriter, PipelineMeasurement, wav_duration_seconds
 from app.paster import paste
 from app.recorder import Recorder
 from app.transcriber import TranscriptionProvider, create_transcriber
@@ -37,6 +38,8 @@ class Pipeline:
         on_complete: Callable[[str], None] | None = None,
         on_error: Callable[[str], None] | None = None,
         failed_recording_path: Path | None = None,
+        metrics_path: Path | None = None,
+        on_measurement: Callable[[PipelineMeasurement], None] | None = None,
     ):
         self.recorder = recorder
         self.transcriber = transcriber
@@ -46,11 +49,70 @@ class Pipeline:
         self._on_complete = on_complete
         self._on_error = on_error
         self._failed_recording_path = failed_recording_path
+        self._metrics_writer = MetricsWriter(metrics_path) if metrics_path is not None else None
+        self._on_measurement = on_measurement
         self._failed_wav: bytes | None = None
         self._state = PipelineState.IDLE
         self._state_lock = threading.RLock()
         self._recording_id_seq = 0
         self._active_recording_id: int | None = None
+
+    @staticmethod
+    def _provider_details(provider: object) -> tuple[str, str]:
+        name = str(getattr(provider, "provider", "") or provider.__class__.__name__.lower())
+        model = str(getattr(provider, "model", "") or "")
+        return name, model
+
+    @staticmethod
+    def _exception_code(prefix: str, error: Exception) -> str:
+        status = getattr(getattr(error, "response", None), "status_code", None)
+        if status is not None:
+            return f"{prefix}_http_{status}"
+        return f"{prefix}_{error.__class__.__name__.lower()}"
+
+    def _emit_measurement(
+        self,
+        *,
+        recording_id: int | None,
+        source: str,
+        wav_bytes: bytes | None,
+        recorder_stop_s: float,
+        transcription_s: float | None,
+        cleanup_s: float | None,
+        total_s: float,
+        language: str = "",
+        text_chars: int = 0,
+        success: bool,
+        error: str = "",
+        fallback_reason: str = "",
+    ) -> None:
+        transcription_provider, transcription_model = self._provider_details(self.transcriber)
+        cleanup_provider, cleanup_model = self._provider_details(self.cleanup)
+        measurement = PipelineMeasurement(
+            recording_id=recording_id,
+            source=source,
+            audio_duration_s=wav_duration_seconds(wav_bytes) if wav_bytes else None,
+            recorder_stop_s=recorder_stop_s,
+            transcription_s=transcription_s,
+            cleanup_s=cleanup_s,
+            total_s=total_s,
+            transcription_provider=transcription_provider,
+            transcription_model=transcription_model,
+            cleanup_provider=cleanup_provider,
+            cleanup_model=cleanup_model,
+            language=language,
+            text_chars=text_chars,
+            success=success,
+            error=error,
+            fallback_reason=fallback_reason,
+        )
+        if self._metrics_writer is not None:
+            self._metrics_writer.append(measurement)
+        if self._on_measurement is not None:
+            try:
+                self._on_measurement(measurement)
+            except Exception:
+                logger.exception("Pipeline measurement callback error")
 
     @property
     def state(self) -> PipelineState:
@@ -155,6 +217,7 @@ class Pipeline:
             try:
                 wav_bytes = self.recorder.stop(abort=abort_recording_stop)
             except Exception:
+                total = time.perf_counter() - t_total
                 logger.exception(
                     "Recorder stop failed [source=%s recording=%s]",
                     source,
@@ -164,6 +227,17 @@ class Pipeline:
                     PipelineState.IDLE,
                     source=f"{source}:stop_error",
                     recording_id=recording_id,
+                )
+                self._emit_measurement(
+                    recording_id=recording_id,
+                    source=source,
+                    wav_bytes=None,
+                    recorder_stop_s=time.perf_counter() - t_stop,
+                    transcription_s=None,
+                    cleanup_s=None,
+                    total_s=total,
+                    success=False,
+                    error="recorder_stop_failed",
                 )
                 return False
 
@@ -177,6 +251,7 @@ class Pipeline:
                 )
 
             if not wav_bytes:
+                total = time.perf_counter() - t_total
                 logger.warning(
                     "No audio captured [source=%s recording=%s]",
                     source,
@@ -187,6 +262,17 @@ class Pipeline:
                     source=f"{source}:empty_audio",
                     recording_id=recording_id,
                 )
+                self._emit_measurement(
+                    recording_id=recording_id,
+                    source=source,
+                    wav_bytes=None,
+                    recorder_stop_s=stop_elapsed,
+                    transcription_s=None,
+                    cleanup_s=None,
+                    total_s=total,
+                    success=False,
+                    error="empty_audio",
+                )
                 return False
 
             self._set_state(
@@ -195,7 +281,13 @@ class Pipeline:
                 recording_id=recording_id,
             )
 
-        return self._process_audio(wav_bytes, source, recording_id, t_total)
+        return self._process_audio(
+            wav_bytes,
+            source,
+            recording_id,
+            t_total,
+            recorder_stop_s=stop_elapsed,
+        )
 
     def _process_audio(
         self,
@@ -204,15 +296,20 @@ class Pipeline:
         recording_id: int | None,
         t_total: float,
         *,
+        recorder_stop_s: float = 0.0,
         from_retry: bool = False,
     ) -> bool:
         """Transcribe, clean, and paste audio. Caller must have set PROCESSING state."""
         # Transcribe
+        t_transcribe = time.perf_counter()
         try:
             result = self.transcriber.transcribe(wav_bytes)
         except Exception:
+            transcribe_elapsed = time.perf_counter() - t_transcribe
             logger.exception(
-                "Transcription failed [source=%s recording=%s]",
+                "Transcription failed [provider=%s model=%s source=%s recording=%s]",
+                self._provider_details(self.transcriber)[0],
+                self._provider_details(self.transcriber)[1],
                 source,
                 recording_id if recording_id is not None else "-",
             )
@@ -222,6 +319,18 @@ class Pipeline:
                 source=f"{source}:transcription_error",
                 recording_id=recording_id,
             )
+            self._emit_measurement(
+                recording_id=recording_id,
+                source=source,
+                wav_bytes=wav_bytes,
+                recorder_stop_s=recorder_stop_s,
+                transcription_s=transcribe_elapsed,
+                cleanup_s=None,
+                total_s=time.perf_counter() - t_total,
+                success=False,
+                error="transcription_failed",
+                fallback_reason="transcription_exception",
+            )
             self._notify_error("transcription_failed")
             return False
 
@@ -230,8 +339,11 @@ class Pipeline:
             self._clear_failed_recording()
 
         if not result.text.strip():
+            transcribe_elapsed = time.perf_counter() - t_transcribe
             logger.info(
-                "Empty transcription [source=%s recording=%s]",
+                "Empty transcription [provider=%s model=%s source=%s recording=%s]",
+                self._provider_details(self.transcriber)[0],
+                self._provider_details(self.transcriber)[1],
                 source,
                 recording_id if recording_id is not None else "-",
             )
@@ -240,37 +352,73 @@ class Pipeline:
                 source=f"{source}:empty_transcript",
                 recording_id=recording_id,
             )
+            self._emit_measurement(
+                recording_id=recording_id,
+                source=source,
+                wav_bytes=wav_bytes,
+                recorder_stop_s=recorder_stop_s,
+                transcription_s=transcribe_elapsed,
+                cleanup_s=None,
+                total_s=time.perf_counter() - t_total,
+                language=getattr(result, "language", ""),
+                success=False,
+                error="empty_transcript",
+            )
             return False
 
+        transcribe_elapsed = time.perf_counter() - t_transcribe
         logger.info(
-            "Transcribed [%s] (%.2fs) [recording=%s]: %s",
+            "Transcribed [%s] (%.2fs provider=%.2fs avg_logprob=%s no_speech_prob=%s) "
+            "[provider=%s model=%s recording=%s text_chars=%d]",
             result.language,
             result.latency,
+            transcribe_elapsed,
+            getattr(result, "avg_logprob", None),
+            getattr(result, "no_speech_prob", None),
+            self._provider_details(self.transcriber)[0],
+            self._provider_details(self.transcriber)[1],
             recording_id if recording_id is not None else "-",
-            result.text,
+            len(result.text),
         )
 
         # Cleanup
         text = result.text
+        cleanup_elapsed = None
+        cleanup_fallback_reason = ""
+        cleanup_error = ""
+        t_cleanup = time.perf_counter()
         try:
             cleanup_result = self.cleanup.clean(text, result.language)
             text = cleanup_result.text
+            cleanup_elapsed = time.perf_counter() - t_cleanup
+            cleanup_fallback_reason = getattr(cleanup_result, "fallback_reason", "")
             logger.info(
-                "Cleaned (%.2fs) [recording=%s]: %s",
+                "Cleaned (%.2fs provider=%.2fs fallback=%s) [provider=%s model=%s recording=%s text_chars=%d]",
                 cleanup_result.latency,
+                cleanup_elapsed,
+                cleanup_fallback_reason or "none",
+                getattr(cleanup_result, "provider", "") or self._provider_details(self.cleanup)[0],
+                getattr(cleanup_result, "model", "") or self._provider_details(self.cleanup)[1],
                 recording_id if recording_id is not None else "-",
-                text,
+                len(text),
             )
-        except Exception:
+        except Exception as exc:
+            cleanup_elapsed = time.perf_counter() - t_cleanup
+            cleanup_fallback_reason = "cleanup_exception"
+            cleanup_error = self._exception_code("cleanup", exc)
             logger.exception(
-                "Cleanup failed, using raw transcript [recording=%s]",
+                "Cleanup failed, using raw transcript [provider=%s model=%s recording=%s]",
+                self._provider_details(self.cleanup)[0],
+                self._provider_details(self.cleanup)[1],
                 recording_id if recording_id is not None else "-",
             )
 
         # Paste
+        paste_failed = False
         try:
             paste(text, delay_ms=self.paste_delay_ms)
         except Exception:
+            paste_failed = True
             logger.exception(
                 "Paste failed [recording=%s]",
                 recording_id if recording_id is not None else "-",
@@ -285,10 +433,27 @@ class Pipeline:
 
         total = time.perf_counter() - t_total
         logger.info(
-            "Total pipeline: %.2fs [source=%s recording=%s]",
+            "Total pipeline: %.2fs [source=%s recording=%s transcription=%.2fs cleanup=%.2fs]",
             total,
             source,
             recording_id if recording_id is not None else "-",
+            transcribe_elapsed,
+            cleanup_elapsed or 0.0,
+        )
+
+        self._emit_measurement(
+            recording_id=recording_id,
+            source=source,
+            wav_bytes=wav_bytes,
+            recorder_stop_s=recorder_stop_s,
+            transcription_s=transcribe_elapsed,
+            cleanup_s=cleanup_elapsed,
+            total_s=total,
+            language=result.language,
+            text_chars=len(text),
+            success=not paste_failed,
+            error=cleanup_error or ("paste_failed" if paste_failed else ""),
+            fallback_reason=cleanup_fallback_reason,
         )
 
         self._set_state(
@@ -363,6 +528,7 @@ class Pipeline:
             source,
             recording_id,
             time.perf_counter(),
+            recorder_stop_s=0.0,
             from_retry=True,
         )
 
@@ -436,6 +602,7 @@ if __name__ == "__main__":
         mistral_api_key=cfg.mistral_api_key,
         groq_api_key=cfg.groq_api_key,
         model=cfg.transcription.model,
+        language=cfg.transcription.language,
         vocabulary=cfg.vocabulary,
         allowed_languages=cfg.transcription.allowed_languages,
         fallback_languages=cfg.transcription.fallback_languages,

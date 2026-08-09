@@ -8,6 +8,7 @@ from app.cleanup import (
     CerebrasCleanup,
     _cleanup_user_message,
     _looks_like_meta_response,
+    _unwrap_transcript_output,
     create_cleanup,
 )
 
@@ -17,7 +18,14 @@ class _FakeCerebrasResponse:
         return None
 
     def json(self):
-        return {"choices": [{"message": {"content": "Cleaned transcript."}}]}
+        return {
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {"content": "Cleaned transcript."},
+                }
+            ]
+        }
 
 
 class _FakeCerebrasClient:
@@ -85,6 +93,73 @@ def test_cerebras_cleanup_retries_rate_limits_before_success():
     assert client.post.call_count == 2
 
 
+def test_cerebras_cleanup_retries_truncated_completion_with_larger_budget():
+    first = mock.Mock()
+    first.raise_for_status.return_value = None
+    first.json.return_value = {
+        "choices": [
+            {
+                "finish_reason": "length",
+                "message": {"content": "Ja, das ist ein guter Punkt. Ich würde tatsächlich sagen"},
+            }
+        ]
+    }
+    second = mock.Mock()
+    second.raise_for_status.return_value = None
+    second.json.return_value = {
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "message": {
+                    "content": (
+                        "Ja, das ist ein guter Punkt. Ich würde tatsächlich sagen, damit wir "
+                        "unser Sales Team nicht überfluten, sollten wir die Top 5 Leads kontaktieren."
+                    )
+                },
+            }
+        ]
+    }
+    client = _FakeCerebrasClient()
+    client.post = mock.Mock(side_effect=[first, second])
+    cleanup = CerebrasCleanup(api_key="csk-test", client=client, sleep=lambda _: None)
+
+    result = cleanup.clean(
+        "Ja, das ist ein guter Punkt. Ich würde tatsächlich sagen, damit wir unser Sales Team "
+        "nicht überfluten, sollten wir die Top 5 Leads kontaktieren.",
+        "de",
+    )
+
+    assert result.text.endswith("Top 5 Leads kontaktieren.")
+    assert result.fallback_reason == ""
+    assert result.attempts == 2
+    first_budget = client.post.call_args_list[0].kwargs["json"]["max_completion_tokens"]
+    second_budget = client.post.call_args_list[1].kwargs["json"]["max_completion_tokens"]
+    assert second_budget > first_budget
+
+
+def test_cerebras_cleanup_falls_back_to_raw_after_truncation_exhausted():
+    response = mock.Mock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {
+        "choices": [
+            {
+                "finish_reason": "length",
+                "message": {"content": "This is only the beginning"},
+            }
+        ]
+    }
+    client = _FakeCerebrasClient()
+    client.post = mock.Mock(return_value=response)
+    raw = "This is only the beginning, and this sentence must never disappear."
+    cleanup = CerebrasCleanup(api_key="csk-test", client=client, sleep=lambda _: None)
+
+    result = cleanup.clean(raw, "en")
+
+    assert result.text == raw
+    assert result.fallback_reason == "truncated_response"
+    assert result.attempts == 3
+
+
 def test_create_cleanup_builds_cerebras_provider():
     cleanup = create_cleanup(provider="cerebras", api_key="csk-test")
 
@@ -120,3 +195,9 @@ def test_meta_response_detector_allows_normal_dictation():
     )
 
     assert _looks_like_meta_response(text) is False
+
+
+def test_cleanup_unwraps_accidental_transcript_tags_without_rewriting_content():
+    assert _unwrap_transcript_output("<transcript>\nHello world.</transcript>") == "Hello world."
+    assert _unwrap_transcript_output("<transcript>\nHello world.") == "Hello world."
+    assert _unwrap_transcript_output("Hello <transcript> world") == "Hello <transcript> world"

@@ -11,7 +11,7 @@ from app.config import SECRETS_FILE, load_config, save_secrets
 logger = logging.getLogger(__name__)
 
 _WINDOW_WIDTH = 420
-_WINDOW_HEIGHT = 300
+_WINDOW_HEIGHT = 340
 _FIELD_HEIGHT = 24
 _LABEL_WIDTH = 120
 _PADDING = 20
@@ -106,6 +106,7 @@ class SettingsDialog:
         self._groq_field = None
         self._cerebras_field = None
         self._cleanup_popup = None
+        self._cleanup_model_field = None
         self._controller = None
 
     def show(self):
@@ -258,6 +259,20 @@ class SettingsDialog:
         self._cleanup_popup.addItemsWithTitles_(["Groq (Fast)", "Cerebras (GPT-OSS)", "Mistral", "Disabled"])
         content.addSubview_(self._cleanup_popup)
 
+        # --- Cleanup Model ---
+        y_pos -= _FIELD_HEIGHT + 16
+
+        cleanup_model_label = AppKit.NSTextField.labelWithString_("Cleanup model:")
+        cleanup_model_label.setFrame_(AppKit.NSMakeRect(_PADDING, y_pos, _LABEL_WIDTH, _FIELD_HEIGHT))
+        cleanup_model_label.setAlignment_(AppKit.NSTextAlignmentRight)
+        content.addSubview_(cleanup_model_label)
+
+        self._cleanup_model_field = AppKit.NSTextField.alloc().initWithFrame_(
+            AppKit.NSMakeRect(field_x, y_pos, field_width, _FIELD_HEIGHT)
+        )
+        self._cleanup_model_field.setPlaceholderString_("provider model ID")
+        content.addSubview_(self._cleanup_model_field)
+
         # --- Buttons ---
         y_pos -= _BUTTON_HEIGHT + 24
 
@@ -298,6 +313,8 @@ class SettingsDialog:
             self._groq_field.setStringValue_(cfg.groq_api_key)
         if cfg.cerebras_api_key:
             self._cerebras_field.setStringValue_(cfg.cerebras_api_key)
+        if self._cleanup_model_field is not None:
+            self._cleanup_model_field.setStringValue_(cfg.cleanup.model)
 
         # Pre-select cleanup dropdown
         if not cfg.cleanup.enabled:
@@ -344,12 +361,27 @@ class SettingsDialog:
                 "Disabled": "disabled",
             }
             cleanup_provider = provider_map.get(selection, "groq")
+            model_field = getattr(self, "_cleanup_model_field", None)
+            cleanup_model = str(model_field.stringValue()).strip() if model_field is not None else ""
+            if not cleanup_model:
+                cleanup_model = {
+                    "groq": "openai/gpt-oss-120b",
+                    "cerebras": "gpt-oss-120b",
+                    "mistral": "mistral-small-latest",
+                    "disabled": "",
+                }.get(cleanup_provider, "")
+            elif cleanup_provider == "groq" and cleanup_model == "gpt-oss-120b":
+                # Cerebras and Groq expose the same family under different IDs.
+                cleanup_model = "openai/gpt-oss-120b"
+            elif cleanup_provider == "cerebras" and cleanup_model == "openai/gpt-oss-120b":
+                cleanup_model = "gpt-oss-120b"
 
             save_secrets(
                 mistral_api_key=mistral_key,
                 groq_api_key=groq_key,
                 cerebras_api_key=cerebras_key,
                 cleanup_provider=cleanup_provider,
+                cleanup_model=cleanup_model,
             )
             logger.info("API keys saved to %s", SECRETS_FILE)
 

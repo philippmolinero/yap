@@ -239,7 +239,7 @@ The multilingual rows are deliberately conservative. Model-family multilingual b
 
 ### Comparison with Yap's current Groq/Mistral design
 
-**Current repo fact:** Yap's default transcription route is Groq `whisper-large-v3-turbo`, with a Mistral Voxtral implementation (`voxtral-mini-2602`) available as the alternative. Its default cleanup route is Groq `meta-llama/llama-4-scout-17b-16e-instruct`, with Mistral `mistral-small-latest` as the alternative. The cleanup implementations use a strict preservation prompt, `temperature=0`, a 2,048-token cap, and raw-transcript fallback when a provider fails or returns a meta-response.
+**Current repo fact:** Yap's default transcription route is Groq `whisper-large-v3-turbo`, with a Mistral Voxtral implementation (`voxtral-mini-2602`) available as the alternative. Its default cleanup route is Groq `openai/gpt-oss-120b`, with Mistral `mistral-small-latest` as the alternative and Cerebras `gpt-oss-120b` as an opt-in route. The cleanup implementations use a strict preservation prompt, bounded completion budgets, retry/truncation guards, and raw-transcript fallback when a provider fails or returns unusable output.
 
 That creates a clean integration boundary:
 

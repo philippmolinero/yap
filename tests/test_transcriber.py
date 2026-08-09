@@ -156,3 +156,52 @@ def test_groq_transcriber_retries_disallowed_language(monkeypatch):
 
     assert result.text == "Kleiner Test."
     assert result.language == "German"
+
+
+def test_groq_transcriber_sends_language_prompt_and_quality_settings(monkeypatch):
+    transcriber = GroqTranscriber(
+        api_key="gsk-test",
+        vocabulary=["Cerebras", "Voxtral Realtime"],
+        language="en",
+    )
+
+    class _Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "text": "Use Cerebras with Voxtral Realtime.",
+                "language": "en",
+                "duration": 1.2,
+                "segments": [
+                    {
+                        "avg_logprob": -0.11,
+                        "no_speech_prob": 0.02,
+                        "compression_ratio": 1.4,
+                    }
+                ],
+            }
+
+    captured = {}
+
+    def fake_post(client, url, *, files, headers):
+        captured["files"] = files
+        captured["headers"] = headers
+        return _Response()
+
+    monkeypatch.setattr(transcriber_module, "_post_with_retry", fake_post)
+
+    result = transcriber.transcribe(b"wav")
+
+    assert result.text == "Use Cerebras with Voxtral Realtime."
+    assert result.avg_logprob == -0.11
+    assert result.no_speech_prob == 0.02
+    assert result.compression_ratio == 1.4
+    fields = {name: value for name, value in captured["files"] if name != "file"}
+    assert fields["model"] == (None, "whisper-large-v3-turbo")
+    assert fields["response_format"] == (None, "verbose_json")
+    assert fields["language"] == (None, "en")
+    assert fields["temperature"] == (None, "0")
+    assert "Cerebras" in fields["prompt"][1]
+    assert "Voxtral Realtime" in fields["prompt"][1]

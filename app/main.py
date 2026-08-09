@@ -42,6 +42,7 @@ logger = logging.getLogger(__name__)
 _ICON_PATH = str(get_resource_path("assets", "icon_menubar.png"))
 HISTORY_FILE = CONFIG_DIR / "history.json"
 FAILED_RECORDING_FILE = CONFIG_DIR / "last_failed_recording.wav"
+METRICS_FILE = CONFIG_DIR / "pipeline_metrics.jsonl"
 _HISTORY_LIMIT = 15
 
 
@@ -233,6 +234,7 @@ class YapApp(rumps.App):
             mistral_api_key=self.cfg.mistral_api_key,
             groq_api_key=self.cfg.groq_api_key,
             model=self.cfg.transcription.model,
+            language=self.cfg.transcription.language,
             vocabulary=self.cfg.vocabulary,
             allowed_languages=self.cfg.transcription.allowed_languages,
             fallback_languages=self.cfg.transcription.fallback_languages,
@@ -261,6 +263,7 @@ class YapApp(rumps.App):
             on_complete=self._on_dictation_complete,
             on_error=self._on_pipeline_error,
             failed_recording_path=FAILED_RECORDING_FILE,
+            metrics_path=METRICS_FILE,
         )
         thai_cfg = self.cfg.thai_practice
         self.thai_practice = ThaiPracticeCapture(

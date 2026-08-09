@@ -18,6 +18,7 @@ Yap is a lightweight macOS menubar app for voice dictation. Hold Right Option to
 - Config: `~/.config/yap/config.toml` (user), `config/default.toml` (bundled defaults)
 - Secrets: `~/.config/yap/secrets.toml` (API keys, managed via Settings dialog)
 - Logs: `~/.config/yap/yap.log` (bundled app only, overwritten each launch)
+- Pipeline metrics: `~/.config/yap/pipeline_metrics.jsonl` (mode `0600`, timings and provider diagnostics; no transcript content)
 - Env vars: `MISTRAL_API_KEY`, `GROQ_API_KEY`, `CEREBRAS_API_KEY` in `.env` (dev fallback)
 
 ## Update Workflow

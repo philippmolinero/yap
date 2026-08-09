@@ -5,6 +5,7 @@ doesn't expose the `context_bias` parameter yet.
 """
 
 import logging
+import statistics
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -40,6 +41,10 @@ class TranscriptionResult:
     text: str
     language: str
     latency: float
+    duration: float | None = None
+    avg_logprob: float | None = None
+    no_speech_prob: float | None = None
+    compression_ratio: float | None = None
 
 
 class TranscriptionProvider(ABC):
@@ -116,6 +121,35 @@ def contains_cjk(text: str) -> bool:
     return False
 
 
+def _vocabulary_prompt(terms: list[str]) -> str:
+    """Build Groq's short spelling/context prompt within its 224-token limit."""
+    normalized = [" ".join(term.split()) for term in terms if term.strip()]
+    if not normalized:
+        return ""
+    prompt = "Preferred spellings and technical terms: " + ", ".join(normalized)
+    # Keep room below the documented 224-token limit without requiring a
+    # tokenizer dependency. Truncate at a term boundary where possible.
+    if len(prompt) <= 700:
+        return prompt
+    return prompt[:700].rsplit(", ", 1)[0]
+
+
+def _segment_quality(body: dict) -> tuple[float | None, float | None, float | None]:
+    segments = body.get("segments") or []
+    values = {"avg_logprob": [], "no_speech_prob": [], "compression_ratio": []}
+    for segment in segments:
+        if not isinstance(segment, dict):
+            continue
+        for key in values:
+            value = segment.get(key)
+            if isinstance(value, (int, float)):
+                values[key].append(float(value))
+    return tuple(
+        statistics.fmean(values[key]) if values[key] else None
+        for key in ("avg_logprob", "no_speech_prob", "compression_ratio")
+    )
+
+
 def _score_allowed_transcript(result: TranscriptionResult, allowed_languages: set[str]) -> int:
     text = result.text.strip()
     if not text:
@@ -135,6 +169,7 @@ class Transcriber(TranscriptionProvider):
     def __init__(self, api_key: str, model: str = "voxtral-mini-2602", vocabulary: list[str] | None = None):
         self.api_key = api_key
         self.model = model
+        self.provider = "mistral"
         self.vocabulary = vocabulary or []
         self._client = httpx.Client(timeout=30.0)
 
@@ -191,10 +226,13 @@ class GroqTranscriber(TranscriptionProvider):
         language: str = "",
         allowed_languages: list[str] | None = None,
         fallback_languages: list[str] | None = None,
+        vocabulary: list[str] | None = None,
     ):
         self.api_key = api_key
         self.model = model
+        self.provider = "groq"
         self.language = language
+        self.vocabulary = vocabulary or []
         self.allowed_languages = {
             normalize_language(language)
             for language in (allowed_languages or [])
@@ -234,9 +272,13 @@ class GroqTranscriber(TranscriptionProvider):
             ("model", (None, self.model)),
             ("file", ("recording.wav", wav_bytes, "audio/wav")),
             ("response_format", (None, "verbose_json")),
+            ("temperature", (None, "0")),
         ]
         if language:
             fields.append(("language", (None, language)))
+        prompt = _vocabulary_prompt(self.vocabulary)
+        if prompt:
+            fields.append(("prompt", (None, prompt)))
 
         headers = {"Authorization": f"Bearer {self.api_key}"}
 
@@ -250,10 +292,15 @@ class GroqTranscriber(TranscriptionProvider):
         latency = time.perf_counter() - t0
 
         body = resp.json()
+        avg_logprob, no_speech_prob, compression_ratio = _segment_quality(body)
         return TranscriptionResult(
             text=body.get("text", ""),
             language=body.get("language", ""),
             latency=latency,
+            duration=body.get("duration"),
+            avg_logprob=avg_logprob,
+            no_speech_prob=no_speech_prob,
+            compression_ratio=compression_ratio,
         )
 
     def _is_allowed_result(self, result: TranscriptionResult) -> bool:
@@ -277,6 +324,7 @@ def create_transcriber(
     vocabulary: list[str] | None = None,
     allowed_languages: list[str] | None = None,
     fallback_languages: list[str] | None = None,
+    language: str = "",
     allow_unconfigured: bool = False,
 ) -> TranscriptionProvider:
     """Factory: create the configured transcription provider."""
@@ -288,8 +336,10 @@ def create_transcriber(
         return GroqTranscriber(
             api_key=groq_api_key,
             model=model or "whisper-large-v3-turbo",
+            language=language,
             allowed_languages=allowed_languages,
             fallback_languages=fallback_languages,
+            vocabulary=vocabulary,
         )
 
     if not mistral_api_key:

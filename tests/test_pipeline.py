@@ -313,3 +313,29 @@ def test_silence_auto_stop_uses_abortive_recorder_stop(monkeypatch):
         pipeline_module.PipelineState.IDLE,
     ]
     assert pasted == ["hello world"]
+
+
+def test_pipeline_emits_privacy_preserving_stage_measurement(monkeypatch):
+    pasted: list[str] = []
+    measurements = []
+    monkeypatch.setattr(pipeline_module, "paste", lambda text, delay_ms=0: pasted.append(text))
+    pipeline = pipeline_module.Pipeline(
+        recorder=_FakeRecorder(),
+        transcriber=_FakeTranscriber(text="measured text"),
+        cleanup=NoopCleanup(),
+        paste_delay_ms=0,
+        on_measurement=measurements.append,
+    )
+
+    assert pipeline.start_recording(source="hotkey_down") is True
+    assert pipeline.stop_recording_and_process(source="hotkey_up") is True
+
+    assert pasted == ["measured text"]
+    assert len(measurements) == 1
+    measurement = measurements[0]
+    assert measurement.transcription_s is not None
+    assert measurement.cleanup_s is not None
+    assert measurement.cleanup_s >= 0.0
+    assert measurement.text_chars == len("measured text")
+    assert measurement.success is True
+    assert measurement.fallback_reason == ""

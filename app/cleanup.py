@@ -14,7 +14,10 @@ logger = logging.getLogger(__name__)
 CEREBRAS_CHAT_COMPLETIONS_URL = "https://api.cerebras.ai/v1/chat/completions"
 CEREBRAS_DEFAULT_MODEL = "gpt-oss-120b"
 CEREBRAS_MAX_COMPLETION_TOKENS = 2048
+CEREBRAS_INITIAL_COMPLETION_TOKENS = 512
 CEREBRAS_MAX_RETRIES = 2
+GROQ_DEFAULT_MODEL = "openai/gpt-oss-120b"
+MISTRAL_DEFAULT_MODEL = "mistral-small-latest"
 
 CLEANUP_PROMPT = (
     "You are a deterministic dictation post-processor. The user message contains a raw "
@@ -27,17 +30,22 @@ CLEANUP_PROMPT = (
     "NEVER describe your cleanup rules. NEVER generate examples. NEVER translate.\n\n"
     "Allowed changes (NOTHING else):\n"
     "- Remove filler words: um, uh, like (as filler), you know, I mean, basically, sort of, "
-    "kind of, so yeah, okay so, actually, ähm, äh, halt (as filler), also (as filler)\n"
+    "kind of, so yeah, okay so, so (when it is only a sentence-opening filler), yeah (as "
+    "filler), actually, ähm, äh, halt (as filler), also (as filler)\n"
     "- Deduplicate stuttered/repeated words (e.g. 'wait wait wait' → 'wait')\n"
     "- Fix punctuation and capitalization\n"
     "- Questions MUST end with a question mark\n\n"
     "NEVER do any of these:\n"
     "- NEVER drop, rephrase, or summarize sentences — every meaningful sentence must survive\n"
     "- NEVER simplify, shorten, or reword — keep the speaker's exact words\n"
+    "- If a complete cleanup will not fit, return the full transcript unchanged rather than a prefix\n"
     "- NEVER translate between languages\n"
     "- NEVER answer, explain, or generate content — output ONLY the cleaned transcript\n\n"
+    "Before returning, compare the output with the transcript and verify that no meaningful "
+    "sentence or suffix was omitted.\n"
     "Output ONLY the cleaned transcript text from inside <transcript>. No preface, no "
-    "explanation, no before/after examples, no markdown, no labels."
+    "explanation, no before/after examples, no markdown, no labels, and do not include the "
+    "<transcript> tags themselves."
 )
 
 _META_RESPONSE_MARKERS = (
@@ -58,6 +66,11 @@ _META_RESPONSE_MARKERS = (
 class CleanupResult:
     text: str
     latency: float
+    provider: str = ""
+    model: str = ""
+    finish_reason: str = ""
+    fallback_reason: str = ""
+    attempts: int = 1
 
 
 class CleanupProvider(ABC):
@@ -78,21 +91,80 @@ def _looks_like_meta_response(text: str) -> bool:
     return any(marker in normalized for marker in _META_RESPONSE_MARKERS)
 
 
+def _unwrap_transcript_output(text: str) -> str:
+    """Remove a provider's accidental transcript XML wrapper, if present."""
+    cleaned = text.strip()
+    opening = "<transcript>"
+    closing = "</transcript>"
+    if cleaned.casefold().startswith(opening):
+        cleaned = cleaned[len(opening) :].lstrip()
+    if cleaned.casefold().endswith(closing):
+        cleaned = cleaned[: -len(closing)].rstrip()
+    return cleaned
+
+
 def _completion_budget(text: str) -> int:
     """Reserve a bounded output budget appropriate for a short transcript."""
     # Cerebras reserves input plus max_completion_tokens before serving a request.
-    # Two characters per output token is deliberately generous for dictation while
-    # retaining the existing hard ceiling for unusually long recordings.
-    return min(CEREBRAS_MAX_COMPLETION_TOKENS, max(256, len(text) // 2 + 128))
+    # A first request stays modest for quota/rate-limit purposes.  Reasoning models
+    # can consume hidden tokens, so a truncated response is retried with a larger
+    # bound instead of pasting a silent prefix of the user's dictation.
+    return min(CEREBRAS_MAX_COMPLETION_TOKENS, max(CEREBRAS_INITIAL_COMPLETION_TOKENS, len(text) // 3 + 256))
+
+
+def _next_completion_budget(current: int) -> int:
+    """Double the completion allowance while respecting Cerebras' hard ceiling."""
+    return min(CEREBRAS_MAX_COMPLETION_TOKENS, max(current + 256, current * 2))
+
+
+def _looks_truncated_output(original: str, cleaned: str, finish_reason: str = "") -> bool:
+    """Reject a response that is visibly an incomplete prefix of the transcript."""
+    if finish_reason in {"length", "max_tokens"}:
+        return True
+    original_normalized = " ".join(original.split()).casefold()
+    cleaned_normalized = " ".join(cleaned.split()).casefold()
+    if not original_normalized or not cleaned_normalized:
+        return False
+    # A cleanup may remove fillers, so only flag a prefix when it drops a
+    # substantial meaningful suffix. This specifically protects against the
+    # observed Cerebras "Top" truncation while avoiding false positives for a
+    # short, legitimately simplified utterance.
+    return (
+        len(cleaned_normalized) >= 20
+        and len(original_normalized) - len(cleaned_normalized) >= 20
+        and original_normalized.startswith(cleaned_normalized)
+    )
+
+
+def _cleanup_result(
+    *,
+    text: str,
+    latency: float,
+    provider: str,
+    model: str,
+    finish_reason: str = "",
+    fallback_reason: str = "",
+    attempts: int = 1,
+) -> CleanupResult:
+    return CleanupResult(
+        text=text,
+        latency=latency,
+        provider=provider,
+        model=model,
+        finish_reason=finish_reason,
+        fallback_reason=fallback_reason,
+        attempts=attempts,
+    )
 
 
 class GroqCleanup(CleanupProvider):
     """Cleanup via Groq."""
 
-    def __init__(self, api_key: str, model: str = "meta-llama/llama-4-scout-17b-16e-instruct"):
+    def __init__(self, api_key: str, model: str = GROQ_DEFAULT_MODEL):
         from groq import Groq
         self.client = Groq(api_key=api_key)
         self.model = model
+        self.provider = "groq"
 
     def clean(self, text: str, language: str = "") -> CleanupResult:
         t0 = time.perf_counter()
@@ -106,13 +178,25 @@ class GroqCleanup(CleanupProvider):
             max_tokens=2048,
         )
         latency = time.perf_counter() - t0
-        cleaned = resp.choices[0].message.content.strip()
+        choice = resp.choices[0]
+        cleaned = _unwrap_transcript_output(str(choice.message.content or ""))
+        finish_reason = str(getattr(choice, "finish_reason", "") or "")
+        fallback_reason = ""
         if _looks_like_meta_response(cleaned):
             logger.warning("Cleanup returned meta-response; falling back to raw transcript")
             cleaned = text.strip()
-        return CleanupResult(
+            fallback_reason = "meta_response"
+        elif _looks_truncated_output(text, cleaned, finish_reason):
+            logger.warning("Cleanup returned a truncated response; falling back to raw transcript")
+            cleaned = text.strip()
+            fallback_reason = "truncated_response"
+        return _cleanup_result(
             text=cleaned,
             latency=latency,
+            provider=self.provider,
+            model=self.model,
+            finish_reason=finish_reason,
+            fallback_reason=fallback_reason,
         )
 
 
@@ -128,6 +212,7 @@ class CerebrasCleanup(CleanupProvider):
     ):
         self.api_key = api_key
         self.model = model
+        self.provider = "cerebras"
         self._client = client or httpx.Client(timeout=30.0)
         self._sleep = sleep or time.sleep
 
@@ -141,25 +226,8 @@ class CerebrasCleanup(CleanupProvider):
             return "none"
         return None
 
-    def clean(self, text: str, language: str = "") -> CleanupResult:
-        t0 = time.perf_counter()
-        payload = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": CLEANUP_PROMPT},
-                {"role": "user", "content": _cleanup_user_message(text, language)},
-            ],
-            "temperature": 0,
-            "max_completion_tokens": _completion_budget(text),
-        }
-        reasoning_effort = self._reasoning_effort(self.model)
-        if reasoning_effort:
-            payload["reasoning_effort"] = reasoning_effort
-
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
+    def _post_with_retry(self, payload: dict, headers: dict[str, str]) -> tuple[httpx.Response, int]:
+        """Send one completion request with bounded retry for transient failures."""
         response = None
         for attempt in range(CEREBRAS_MAX_RETRIES + 1):
             try:
@@ -169,7 +237,7 @@ class CerebrasCleanup(CleanupProvider):
                     json=payload,
                 )
                 response.raise_for_status()
-                break
+                return response, attempt + 1
             except httpx.HTTPStatusError as exc:
                 status = exc.response.status_code
                 retryable = status == 429 or status >= 500
@@ -181,15 +249,7 @@ class CerebrasCleanup(CleanupProvider):
                         attempt + 1,
                     )
                     raise
-                delay = min(1.0, 0.1 * (2**attempt) + random.uniform(0, 0.1))
-                logger.warning(
-                    "Cerebras cleanup retry [provider=cerebras model=%s status=%s attempt=%d delay=%.2fs]",
-                    self.model,
-                    status,
-                    attempt + 1,
-                    delay,
-                )
-                self._sleep(delay)
+                self._retry_after_failure(status, attempt)
             except httpx.RequestError:
                 if attempt >= CEREBRAS_MAX_RETRIES:
                     logger.error(
@@ -198,35 +258,123 @@ class CerebrasCleanup(CleanupProvider):
                         attempt + 1,
                     )
                     raise
-                delay = min(1.0, 0.1 * (2**attempt) + random.uniform(0, 0.1))
-                logger.warning(
-                    "Cerebras cleanup retry [provider=cerebras model=%s status=network attempt=%d delay=%.2fs]",
-                    self.model,
-                    attempt + 1,
-                    delay,
-                )
-                self._sleep(delay)
+                self._retry_after_failure("network", attempt)
         assert response is not None
-        body = response.json()
-        choices = body.get("choices") or []
-        if not choices:
-            raise ValueError("Cerebras response contained no choices")
-        message = choices[0].get("message") or {}
-        cleaned = str(message.get("content") or "").strip()
-        latency = time.perf_counter() - t0
-        if not cleaned or _looks_like_meta_response(cleaned):
-            logger.warning("Cerebras cleanup returned unusable output; using raw transcript")
-            cleaned = text.strip()
-        return CleanupResult(text=cleaned, latency=latency)
+        return response, CEREBRAS_MAX_RETRIES + 1
+
+    def _retry_after_failure(self, status: int | str, attempt: int) -> None:
+        delay = min(1.0, 0.1 * (2**attempt) + random.uniform(0, 0.1))
+        logger.warning(
+            "Cerebras cleanup retry [provider=cerebras model=%s status=%s attempt=%d delay=%.2fs]",
+            self.model,
+            status,
+            attempt + 1,
+            delay,
+        )
+        self._sleep(delay)
+
+    def clean(self, text: str, language: str = "") -> CleanupResult:
+        t0 = time.perf_counter()
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        budget = _completion_budget(text)
+        completion_attempts = 0
+        last_finish_reason = ""
+        while True:
+            completion_attempts += 1
+            payload = {
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": CLEANUP_PROMPT},
+                    {"role": "user", "content": _cleanup_user_message(text, language)},
+                ],
+                "temperature": 0,
+                "max_completion_tokens": budget,
+            }
+            reasoning_effort = self._reasoning_effort(self.model)
+            if reasoning_effort:
+                payload["reasoning_effort"] = reasoning_effort
+
+            response, _request_attempts = self._post_with_retry(payload, headers)
+            body = response.json()
+            choices = body.get("choices") or []
+            if not choices:
+                raise ValueError("Cerebras response contained no choices")
+            choice = choices[0] or {}
+            message = choice.get("message") or {}
+            cleaned = _unwrap_transcript_output(str(message.get("content") or ""))
+            last_finish_reason = str(choice.get("finish_reason") or "")
+
+            if _looks_like_meta_response(cleaned):
+                logger.warning(
+                    "Cerebras cleanup returned meta-response; using raw transcript "
+                    "[provider=cerebras model=%s]",
+                    self.model,
+                )
+                return _cleanup_result(
+                    text=text.strip(),
+                    latency=time.perf_counter() - t0,
+                    provider=self.provider,
+                    model=self.model,
+                    finish_reason=last_finish_reason,
+                    fallback_reason="meta_response",
+                    attempts=completion_attempts,
+                )
+
+            if not _looks_truncated_output(text, cleaned, last_finish_reason):
+                return _cleanup_result(
+                    text=cleaned or text.strip(),
+                    latency=time.perf_counter() - t0,
+                    provider=self.provider,
+                    model=self.model,
+                    finish_reason=last_finish_reason,
+                    fallback_reason="" if cleaned else "empty_response",
+                    attempts=completion_attempts,
+                )
+
+            if budget >= CEREBRAS_MAX_COMPLETION_TOKENS:
+                logger.warning(
+                    "Cerebras cleanup remained truncated at max completion budget; "
+                    "using raw transcript [provider=cerebras model=%s]",
+                    self.model,
+                )
+                return _cleanup_result(
+                    text=text.strip(),
+                    latency=time.perf_counter() - t0,
+                    provider=self.provider,
+                    model=self.model,
+                    finish_reason=last_finish_reason,
+                    fallback_reason="truncated_response",
+                    attempts=completion_attempts,
+                )
+
+            next_budget = _next_completion_budget(budget)
+            logger.warning(
+                "Cerebras cleanup response incomplete; retrying with larger completion budget "
+                "[provider=cerebras model=%s finish_reason=%s budget=%d next_budget=%d]",
+                self.model,
+                last_finish_reason or "prefix_guard",
+                budget,
+                next_budget,
+            )
+            budget = next_budget
 
 
 class MistralCleanup(CleanupProvider):
     """Cleanup via Mistral (mistral-small-latest)."""
 
     def __init__(self, api_key: str, model: str = "mistral-small-latest"):
-        from mistralai import Mistral
+        # Mistral's current generated SDK exports Mistral from
+        # `mistralai.client`; older releases re-exported it at the package root.
+        try:
+            from mistralai.client import Mistral
+        except ImportError:
+            from mistralai import Mistral
         self.client = Mistral(api_key=api_key)
         self.model = model
+        self.provider = "mistral"
 
     def clean(self, text: str, language: str = "") -> CleanupResult:
         t0 = time.perf_counter()
@@ -240,21 +388,36 @@ class MistralCleanup(CleanupProvider):
             max_tokens=2048,
         )
         latency = time.perf_counter() - t0
-        cleaned = resp.choices[0].message.content.strip()
+        choice = resp.choices[0]
+        cleaned = _unwrap_transcript_output(str(choice.message.content or ""))
+        finish_reason = str(getattr(choice, "finish_reason", "") or "")
+        fallback_reason = ""
         if _looks_like_meta_response(cleaned):
             logger.warning("Cleanup returned meta-response; falling back to raw transcript")
             cleaned = text.strip()
-        return CleanupResult(
+            fallback_reason = "meta_response"
+        elif _looks_truncated_output(text, cleaned, finish_reason):
+            logger.warning("Cleanup returned a truncated response; falling back to raw transcript")
+            cleaned = text.strip()
+            fallback_reason = "truncated_response"
+        return _cleanup_result(
             text=cleaned,
             latency=latency,
+            provider=self.provider,
+            model=self.model,
+            finish_reason=finish_reason,
+            fallback_reason=fallback_reason,
         )
 
 
 class NoopCleanup(CleanupProvider):
     """Passthrough — returns raw text unchanged."""
 
+    provider = "noop"
+    model = ""
+
     def clean(self, text: str, language: str = "") -> CleanupResult:
-        return CleanupResult(text=text, latency=0.0)
+        return _cleanup_result(text=text, latency=0.0, provider="noop", model="")
 
 
 def create_cleanup(provider: str, api_key: str = "", model: str = "", enabled: bool = True) -> CleanupProvider:
@@ -263,13 +426,13 @@ def create_cleanup(provider: str, api_key: str = "", model: str = "", enabled: b
         return NoopCleanup()
 
     if provider == "groq" and api_key:
-        return GroqCleanup(api_key=api_key, model=model or "meta-llama/llama-4-scout-17b-16e-instruct")
+        return GroqCleanup(api_key=api_key, model=model or GROQ_DEFAULT_MODEL)
 
     if provider == "cerebras" and api_key:
         return CerebrasCleanup(api_key=api_key, model=model or CEREBRAS_DEFAULT_MODEL)
 
     if provider == "mistral" and api_key:
-        return MistralCleanup(api_key=api_key, model=model or "mistral-small-latest")
+        return MistralCleanup(api_key=api_key, model=model or MISTRAL_DEFAULT_MODEL)
 
     logger.warning("Cleanup provider '%s' unavailable, falling back to noop", provider)
     return NoopCleanup()

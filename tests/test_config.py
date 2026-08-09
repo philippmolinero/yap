@@ -141,6 +141,25 @@ class TestSecrets:
         assert keys["groq"] == "gsk-roundtrip"
         assert keys["cerebras"] == "csk-roundtrip"
 
+    def test_save_secrets_roundtrips_cleanup_model_preference(self, tmp_path):
+        secrets_file = tmp_path / "secrets.toml"
+        config_dir = tmp_path / "yap"
+        config_dir.mkdir()
+
+        with mock.patch("app.config.SECRETS_FILE", secrets_file), \
+             mock.patch("app.config.CONFIG_DIR", config_dir):
+            from app.config import save_secrets, _load_secrets
+
+            save_secrets(
+                cerebras_api_key="csk-roundtrip",
+                cleanup_provider="cerebras",
+                cleanup_model="gemma-4-31b",
+            )
+            keys, prefs = _load_secrets()
+
+        assert keys["cerebras"] == "csk-roundtrip"
+        assert prefs == {"cleanup_provider": "cerebras", "cleanup_model": "gemma-4-31b"}
+
 
 class TestLoadConfig:
     """Full config loading with secrets + env var precedence."""
@@ -272,12 +291,13 @@ class TestLoadConfig:
         assert cfg.hotkey.double_tap_ms == 300
         assert cfg.transcription.provider == "groq"
         assert cfg.transcription.model == "whisper-large-v3-turbo"
+        assert cfg.transcription.language == ""
         assert cfg.transcription.sample_rate == 16000
         assert cfg.transcription.allowed_languages == ["en", "de"]
         assert cfg.transcription.fallback_languages == ["de", "en"]
         assert cfg.cleanup.enabled is True
         assert cfg.cleanup.provider == "groq"
-        assert cfg.cleanup.model == "meta-llama/llama-4-scout-17b-16e-instruct"
+        assert cfg.cleanup.model == "openai/gpt-oss-120b"
         assert cfg.cerebras_api_key == ""
         assert cfg.paste.delay_ms == 50
         assert cfg.silence.timeout == 5.0
@@ -364,6 +384,26 @@ class TestLoadConfig:
             cfg = load_config()
 
         assert cfg.cleanup.provider == "groq"
+
+    def test_retired_groq_cleanup_model_is_migrated(self, tmp_path):
+        config_dir = tmp_path / "yap"
+        config_dir.mkdir()
+        config_file = config_dir / "config.toml"
+        config_file.write_text(
+            '[cleanup]\nprovider = "groq"\nmodel = "meta-llama/llama-4-scout-17b-16e-instruct"\n'
+        )
+
+        with mock.patch("app.config.CONFIG_DIR", config_dir), \
+             mock.patch("app.config.CONFIG_FILE", config_file), \
+             mock.patch("app.config.SECRETS_FILE", config_dir / "secrets.toml"), \
+             mock.patch("app.config.VOCAB_FILE", config_dir / "vocabulary.txt"), \
+             mock.patch.dict(os.environ, {}, clear=True):
+            from app.config import load_config
+
+            cfg = load_config()
+
+        assert cfg.cleanup.provider == "groq"
+        assert cfg.cleanup.model == "openai/gpt-oss-120b"
 
 class TestEnsureConfigDir:
     """Config dir creation and bundled file copying."""
