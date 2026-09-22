@@ -45,6 +45,12 @@ struct MenuBarLabel: View {
         guard let url = AppResources.url("icon_menubar", extension: "png"),
               let image = NSImage(contentsOf: url) else { return nil }
         image.isTemplate = true
+        // The source PNG is 44x44 px at 72 dpi, so NSImage reads it as 44 pt
+        // tall. The menu bar wants a ~15 pt glyph: normalize the point size and
+        // keep the aspect ratio.
+        let targetHeight: CGFloat = 15
+        let aspect = image.size.width / max(image.size.height, 1)
+        image.size = NSSize(width: (targetHeight * aspect).rounded(), height: targetHeight)
         return image
     }()
 
