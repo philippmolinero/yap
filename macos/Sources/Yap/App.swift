@@ -44,11 +44,11 @@ struct MenuBarLabel: View {
     private static let icon: NSImage? = {
         guard let url = AppResources.url("icon_menubar", extension: "png"),
               let image = NSImage(contentsOf: url) else { return nil }
-        image.isTemplate = true
-        // SwiftUI renders menu bar images at their literal point size, and this
-        // PNG is 44x44 px at 72 dpi with large transparent margins (the visible
-        // glyph is only ~21x30 px). Scale by the visible glyph, not the canvas.
-        return image.normalizedToGlyphHeight(16)
+        // The bundled art is 44x44 px at 72 dpi with *asymmetric* transparent
+        // margins (glyph occupies y 6...35 of 44), so a centered canvas renders
+        // the glyph off-center. Crop to the visible glyph and scale that to the
+        // standard menu bar height.
+        return image.menuBarGlyph(height: 16)
     }()
 
     var body: some View {
@@ -103,41 +103,67 @@ struct YapMenu: View {
 }
 
 private extension NSImage {
-    /// Scale the image so its *visible* glyph reaches `height` points, keeping
-    /// the aspect ratio. Menu bar artwork usually ships with transparent
-    /// padding, and SwiftUI renders menu bar images at their literal size.
-    func normalizedToGlyphHeight(_ height: CGFloat) -> NSImage {
-        let glyphHeight = opaqueBoundsHeight
-        guard glyphHeight > 0 else {
-            let aspect = size.width / max(size.height, 1)
-            size = NSSize(width: (height * aspect).rounded(), height: height)
+    /// The visible glyph only: transparent margins cropped, content scaled to
+    /// `height` points. Cropping is what makes a centered menu bar icon look
+    /// centered — the bundled art carries asymmetric padding.
+    func menuBarGlyph(height: CGFloat) -> NSImage {
+        guard let rep = bitmapRepresentation,
+              let cgImage = rep.cgImage,
+              let content = opaquePixelBounds(in: rep),
+              let cropped = cgImage.cropping(to: content) else {
+            let factor = height / max(size.height, 1)
+            size = NSSize(width: (size.width * factor).rounded(), height: height)
             return self
         }
-        let factor = height / glyphHeight
-        size = NSSize(
-            width: (size.width * factor).rounded(),
-            height: (size.height * factor).rounded()
+
+        let target = NSSize(
+            width: (CGFloat(content.width) * height / CGFloat(content.height)).rounded(),
+            height: height
         )
-        return self
+        let glyph = NSImage(size: target)
+        glyph.lockFocus()
+        NSGraphicsContext.current?.imageInterpolation = .high
+        NSImage(cgImage: cropped, size: target)
+            .draw(in: NSRect(origin: .zero, size: target))
+        glyph.unlockFocus()
+        glyph.isTemplate = true
+        return glyph
     }
 
-    /// Height of the non-transparent region, in the image's own units.
-    private var opaqueBoundsHeight: CGFloat {
-        guard let tiff = tiffRepresentation,
-              let rep = NSBitmapImageRep(data: tiff) else { return 0 }
+    private var bitmapRepresentation: NSBitmapImageRep? {
+        guard let tiff = tiffRepresentation else { return nil }
+        return NSBitmapImageRep(data: tiff)
+    }
+
+    /// Pixel rect of the non-transparent region, in CGImage coordinates
+    /// (origin top-left, matching `cropping(to:)`).
+    private func opaquePixelBounds(in rep: NSBitmapImageRep) -> CGRect? {
         let width = rep.pixelsWide
         let height = rep.pixelsHigh
+        guard width > 0, height > 0 else { return nil }
+
+        // NSBitmapImageRep.colorAt uses bottom-left origin; CGImage.cropping
+        // uses top-left. Scan in rep coordinates and convert at the end.
+        var minX = width
+        var maxX = -1
         var minY = height
         var maxY = -1
         for y in 0..<height {
             for x in 0..<width where (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.05 {
+                minX = min(minX, x)
+                maxX = max(maxX, x)
                 minY = min(minY, y)
                 maxY = max(maxY, y)
-                break
             }
         }
-        guard maxY >= minY else { return 0 }
-        let pixelsPerPoint = CGFloat(height) / max(size.height, 1)
-        return CGFloat(maxY - minY + 1) / max(pixelsPerPoint, 1)
+        guard maxX >= minX, maxY >= minY else { return nil }
+
+        let flippedY = height - 1 - maxY
+        return CGRect(
+            x: minX,
+            y: flippedY,
+            width: maxX - minX + 1,
+            height: maxY - minY + 1
+        )
     }
 }
