@@ -45,13 +45,10 @@ struct MenuBarLabel: View {
         guard let url = AppResources.url("icon_menubar", extension: "png"),
               let image = NSImage(contentsOf: url) else { return nil }
         image.isTemplate = true
-        // The source PNG is 44x44 px at 72 dpi, so NSImage reads it as 44 pt
-        // tall. The menu bar wants a ~15 pt glyph: normalize the point size and
-        // keep the aspect ratio.
-        let targetHeight: CGFloat = 15
-        let aspect = image.size.width / max(image.size.height, 1)
-        image.size = NSSize(width: (targetHeight * aspect).rounded(), height: targetHeight)
-        return image
+        // SwiftUI renders menu bar images at their literal point size, and this
+        // PNG is 44x44 px at 72 dpi with large transparent margins (the visible
+        // glyph is only ~21x30 px). Scale by the visible glyph, not the canvas.
+        return image.normalizedToGlyphHeight(16)
     }()
 
     var body: some View {
@@ -102,5 +99,45 @@ struct YapMenu: View {
         Divider()
 
         Button("Quit Yap") { model.quit() }
+    }
+}
+
+private extension NSImage {
+    /// Scale the image so its *visible* glyph reaches `height` points, keeping
+    /// the aspect ratio. Menu bar artwork usually ships with transparent
+    /// padding, and SwiftUI renders menu bar images at their literal size.
+    func normalizedToGlyphHeight(_ height: CGFloat) -> NSImage {
+        let glyphHeight = opaqueBoundsHeight
+        guard glyphHeight > 0 else {
+            let aspect = size.width / max(size.height, 1)
+            size = NSSize(width: (height * aspect).rounded(), height: height)
+            return self
+        }
+        let factor = height / glyphHeight
+        size = NSSize(
+            width: (size.width * factor).rounded(),
+            height: (size.height * factor).rounded()
+        )
+        return self
+    }
+
+    /// Height of the non-transparent region, in the image's own units.
+    private var opaqueBoundsHeight: CGFloat {
+        guard let tiff = tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff) else { return 0 }
+        let width = rep.pixelsWide
+        let height = rep.pixelsHigh
+        var minY = height
+        var maxY = -1
+        for y in 0..<height {
+            for x in 0..<width where (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.05 {
+                minY = min(minY, y)
+                maxY = max(maxY, y)
+                break
+            }
+        }
+        guard maxY >= minY else { return 0 }
+        let pixelsPerPoint = CGFloat(height) / max(size.height, 1)
+        return CGFloat(maxY - minY + 1) / max(pixelsPerPoint, 1)
     }
 }
