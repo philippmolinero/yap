@@ -1,0 +1,32 @@
+[hotkey]
+keycode = 62                  # Right Control
+keycodes = [61, 62]           # Right Option (MacBook) or Right Control (external)
+double_tap_ms = 300
+
+[transcription]
+provider = "gemini"
+model = "gemini-3.5-transcribe"
+mode = "smart"                 # Live dictation. Smart text is already cleaned.
+language = ""                  # Optional ISO-639-1 hint; blank keeps automatic detection
+sample_rate = 16000
+allowed_languages = ["en", "de"]
+fallback_languages = ["de", "en"]
+
+[cleanup]
+enabled = true
+provider = "groq"
+model = "openai/gpt-oss-120b"
+
+[paste]
+delay_ms = 50
+
+[silence]
+timeout = 5.0               # seconds of silence before auto-stop (0 = disabled)
+threshold = 0.008            # RMS level below this counts as silence
+
+[thai_practice]
+enabled = true
+modifier_keycode = 60        # Right Shift; hold this before the existing YAP trigger
+prompt_id = "sentence-01"
+prompt_text = "ตอนนั้นฉันอายุเจ็ดขวบ"
+prompt_source = "learning-thai"

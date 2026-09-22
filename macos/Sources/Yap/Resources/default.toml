@@ -1,0 +1,24 @@
+# Yap configuration
+#
+# Yap reads this file on launch and rewrites only the keys it manages when you
+# change Settings. Comments and unknown keys stay untouched.
+
+[hotkey]
+keycodes = [61, 62]           # Right Option (MacBook) or Right Control (external)
+double_tap_ms = 300           # double-tap the trigger for hands-free toggle mode
+
+[transcription]
+provider = "gemini"
+model = "gemini-3.5-transcribe"
+mode = "smart"                 # smart: cleaned text. verbatim: exact words.
+language = ""                  # Optional ISO-639-1 hint; blank keeps automatic detection
+sample_rate = 16000
+allowed_languages = ["en", "de"]
+fallback_languages = ["de", "en"]
+
+[paste]
+delay_ms = 50
+
+[silence]
+timeout = 5.0                  # seconds of silence before auto-stop (0 = disabled)
+threshold = 0.008              # RMS level below this counts as silence
