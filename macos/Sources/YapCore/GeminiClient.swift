@@ -382,6 +382,8 @@ public actor GeminiLiveSession: LiveTranscribing {
     }
 
     private func handleSocketFailure(_ error: Error) {
+        // Teardown after a completed turn is not a failure.
+        guard !finished else { return }
         let message = redacted(error.localizedDescription)
         if finals.isEmpty {
             fail(.transport(message))
