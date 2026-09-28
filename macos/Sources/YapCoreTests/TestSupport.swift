@@ -89,6 +89,7 @@ func allSuites() -> [Suite] {
         metricsSuite(),
         languageSuite(),
         geminiMessageSuite(),
+        geminiLiveSuite(),
         pipelineSuite(),
     ]
 }

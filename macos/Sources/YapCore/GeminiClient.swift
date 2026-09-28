@@ -182,24 +182,77 @@ public struct GeminiTranscriber: Transcribing {
     }
 }
 
+/// Bidirectional live-socket transport. Sends must be awaited one at a time:
+/// `URLSessionWebSocketTask` drops or stalls a send that overlaps another.
+public protocol LiveSocket: AnyObject, Sendable {
+    func connect()
+    func send(text: String) async throws
+    func receiveText() async throws -> String
+    func cancel()
+}
+
+final class URLSessionLiveSocket: LiveSocket, @unchecked Sendable {
+    private let task: URLSessionWebSocketTask?
+
+    init(session: URLSession, socketURL: URL, apiKey: String) {
+        var components = URLComponents(url: socketURL, resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "key", value: apiKey)]
+        if let url = components?.url {
+            self.task = session.webSocketTask(with: url)
+        } else {
+            self.task = nil
+        }
+    }
+
+    func connect() {
+        task?.resume()
+    }
+
+    func send(text: String) async throws {
+        guard let task else { throw TranscriptionError.transport("invalid live url") }
+        try await task.send(.string(text))
+    }
+
+    func receiveText() async throws -> String {
+        guard let task else { throw TranscriptionError.transport("invalid live url") }
+        switch try await task.receive() {
+        case .string(let value):
+            return value
+        case .data(let data):
+            return String(data: data, encoding: .utf8) ?? ""
+        @unknown default:
+            return ""
+        }
+    }
+
+    func cancel() {
+        task?.cancel(with: .normalClosure, reason: nil)
+    }
+}
+
 /// One push-to-talk turn on the streaming Gemini model.
 ///
 /// Semantics (matching the proven protocol):
 /// - no audio byte leaves before the setup completes; early frames are buffered
+/// - websocket writes are strictly ordered: setup, activity start, audio, activity end
 /// - activity start opens the turn, activity end closes it on release
 /// - finalization waits for the finalized `inputTranscription`
 /// - a transport failure with partial finals keeps the partial text
 public actor GeminiLiveSession: LiveTranscribing {
     private let configuration: GeminiConfiguration
-    private let urlSession: URLSession
-    private let socketURL: URL
+    private let socket: any LiveSocket
+    private let setupTimeoutSeconds: TimeInterval
+    private let finalTimeoutSeconds: TimeInterval
+    private let finalGraceSeconds: TimeInterval
 
-    private var socket: URLSessionWebSocketTask?
     private var receiveTask: Task<Void, Never>?
     private var setupTimeoutTask: Task<Void, Never>?
     private var finalTimeoutTask: Task<Void, Never>?
     private var graceTask: Task<Void, Never>?
 
+    private var outbound: [Data] = []
+    private var pumping = false
+    private var socketClosed = false
     private var buffered: [Data] = []
     private var streaming = false
     private var endRequested = false
@@ -211,32 +264,30 @@ public actor GeminiLiveSession: LiveTranscribing {
     private var failure: TranscriptionError?
     private var continuation: CheckedContinuation<TranscriptionResult, Error>?
 
-    private static let setupTimeoutSeconds = 10.0
-    private static let finalTimeoutSeconds = 20.0
-    private static let finalGraceSeconds = 0.75
-
     public init(
         configuration: GeminiConfiguration,
         urlSession: URLSession = .shared,
-        socketURL: URL = GeminiMessage.liveURL
+        socketURL: URL = GeminiMessage.liveURL,
+        socket: (any LiveSocket)? = nil,
+        setupTimeout: TimeInterval = 10,
+        finalTimeout: TimeInterval = 20,
+        grace: TimeInterval = 0.75
     ) {
         self.configuration = configuration
-        self.urlSession = urlSession
-        self.socketURL = socketURL
+        self.socket = socket ?? URLSessionLiveSocket(
+            session: urlSession,
+            socketURL: socketURL,
+            apiKey: configuration.apiKey
+        )
+        self.setupTimeoutSeconds = setupTimeout
+        self.finalTimeoutSeconds = finalTimeout
+        self.finalGraceSeconds = grace
     }
 
     public func start() {
-        guard socket == nil, !finished else { return }
-        var components = URLComponents(url: socketURL, resolvingAgainstBaseURL: false)
-        components?.queryItems = [URLQueryItem(name: "key", value: configuration.apiKey)]
-        guard let url = components?.url else {
-            fail(.transport("invalid live url"))
-            return
-        }
-        let task = urlSession.webSocketTask(with: url)
-        socket = task
-        task.resume()
-        send(GeminiMessage.setup(configuration))
+        guard receiveTask == nil, !finished else { return }
+        socket.connect()
+        enqueue(GeminiMessage.setup(configuration))
         receiveLoop()
         scheduleSetupTimeout()
     }
@@ -244,7 +295,7 @@ public actor GeminiLiveSession: LiveTranscribing {
     public func write(_ pcm: Data) {
         guard !pcm.isEmpty, !endRequested, !finished else { return }
         if streaming {
-            send(GeminiMessage.audio(pcm: pcm))
+            enqueue(GeminiMessage.audio(pcm: pcm))
         } else {
             buffered.append(pcm)
         }
@@ -275,30 +326,47 @@ public actor GeminiLiveSession: LiveTranscribing {
 
     // MARK: - Protocol plumbing
 
-    private func send(_ data: Data) {
-        guard let socket, let text = String(data: data, encoding: .utf8) else { return }
-        socket.send(.string(text)) { error in
-            if let error {
-                YapLog.warning("Gemini live send failed: \(error.localizedDescription)")
-            }
+    /// Queue a websocket message. `URLSessionWebSocketTask` only delivers sends
+    /// that are started after the previous send finishes, so this pump is the
+    /// only writer.
+    private func enqueue(_ data: Data) {
+        guard !finished, !data.isEmpty else { return }
+        outbound.append(data)
+        guard !pumping else { return }
+        pumping = true
+        Task { await self.pumpOutbound() }
+    }
+
+    private func pumpOutbound() async {
+        while !outbound.isEmpty, !finished {
+            let next = outbound.removeFirst()
+            await transmit(next)
+        }
+        pumping = false
+        if !outbound.isEmpty, !finished {
+            pumping = true
+            await pumpOutbound()
+        }
+    }
+
+    private func transmit(_ data: Data) async {
+        guard !finished, let text = String(data: data, encoding: .utf8) else { return }
+        do {
+            try await socket.send(text: text)
+        } catch {
+            guard !finished else { return }
+            YapLog.warning("Gemini live send failed: \(redacted(error.localizedDescription))")
+            handleSocketFailure(error)
         }
     }
 
     private func receiveLoop() {
-        guard let socket else { return }
         receiveTask = Task {
             do {
                 while true {
-                    let message = try await socket.receive()
-                    let text: String
-                    switch message {
-                    case .string(let value): text = value
-                    case .data(let data): text = String(data: data, encoding: .utf8) ?? ""
-                    @unknown default: text = ""
-                    }
+                    let text = try await self.socket.receiveText()
                     if text.isEmpty { continue }
-                    let done = self.handle(text)
-                    if done { return }
+                    if self.handle(text) { return }
                 }
             } catch {
                 self.handleSocketFailure(error)
@@ -329,9 +397,13 @@ public actor GeminiLiveSession: LiveTranscribing {
             return true
         }
 
-        let content = (message["serverContent"] as? [String: Any])
-            ?? (message["server_content"] as? [String: Any])
-        guard let content else { return finished }
+        guard let content = serverContent(from: message) else {
+            let keys = message.keys.sorted().joined(separator: ",")
+            if !keys.isEmpty {
+                YapLog.info("Gemini live ignored keys=\(keys)")
+            }
+            return finished
+        }
 
         let transcription = (content["inputTranscription"] as? [String: Any])
             ?? (content["input_transcription"] as? [String: Any])
@@ -340,6 +412,7 @@ public actor GeminiLiveSession: LiveTranscribing {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if !text.isEmpty {
                 finals.append(text)
+                YapLog.info("Gemini live transcript chars=\(text.count)")
             }
             for key in ["language", "languageCode", "language_code"] {
                 let value = (transcription[key] as? String ?? "").trimmingCharacters(in: .whitespaces)
@@ -353,11 +426,38 @@ public actor GeminiLiveSession: LiveTranscribing {
             }
         }
 
-        if content["turnComplete"] != nil || content["turn_complete"] != nil {
+        if turnIsComplete(content) {
             YapLog.info("Gemini live turn complete")
-            complete()
+            if finals.isEmpty, endSent {
+                // Transcription can arrive after turnComplete. Give it the grace
+                // window instead of falling through to the unary call immediately.
+                scheduleGrace()
+            } else {
+                complete()
+            }
         }
         return finished
+    }
+
+    private func serverContent(from message: [String: Any]) -> [String: Any]? {
+        if let content = message["serverContent"] as? [String: Any] { return content }
+        if let content = message["server_content"] as? [String: Any] { return content }
+        let transcription = (message["inputTranscription"] as? [String: Any])
+            ?? (message["input_transcription"] as? [String: Any])
+        if let transcription {
+            return ["inputTranscription": transcription]
+        }
+        return nil
+    }
+
+    private func turnIsComplete(_ content: [String: Any]) -> Bool {
+        for key in ["turnComplete", "turn_complete"] {
+            guard let value = content[key] else { continue }
+            if let flag = value as? Bool { return flag }
+            if let number = value as? NSNumber { return number.boolValue }
+            return true
+        }
+        return false
     }
 
     private func onSetupComplete() {
@@ -366,9 +466,9 @@ public actor GeminiLiveSession: LiveTranscribing {
         setupTimeoutTask?.cancel()
         setupTimeoutTask = nil
         YapLog.info("Gemini live setup complete")
-        send(GeminiMessage.activityStart())
+        enqueue(GeminiMessage.activityStart())
         for chunk in buffered {
-            send(GeminiMessage.audio(pcm: chunk))
+            enqueue(GeminiMessage.audio(pcm: chunk))
         }
         buffered.removeAll()
         sendActivityEndIfNeeded()
@@ -377,7 +477,8 @@ public actor GeminiLiveSession: LiveTranscribing {
     private func sendActivityEndIfNeeded() {
         guard streaming, endRequested, !endSent, !finished else { return }
         endSent = true
-        send(GeminiMessage.activityEnd())
+        enqueue(GeminiMessage.activityEnd())
+        YapLog.info("Gemini live activity end queued")
         scheduleFinalTimeout()
     }
 
@@ -398,7 +499,11 @@ public actor GeminiLiveSession: LiveTranscribing {
     private func scheduleSetupTimeout() {
         setupTimeoutTask?.cancel()
         setupTimeoutTask = Task {
-            try? await Task.sleep(for: .seconds(Self.setupTimeoutSeconds))
+            do {
+                try await Task.sleep(for: .seconds(self.setupTimeoutSeconds))
+            } catch {
+                return
+            }
             self.setupTimeoutElapsed()
         }
     }
@@ -412,7 +517,11 @@ public actor GeminiLiveSession: LiveTranscribing {
     private func scheduleFinalTimeout() {
         finalTimeoutTask?.cancel()
         finalTimeoutTask = Task {
-            try? await Task.sleep(for: .seconds(Self.finalTimeoutSeconds))
+            do {
+                try await Task.sleep(for: .seconds(self.finalTimeoutSeconds))
+            } catch {
+                return
+            }
             self.finalTimeoutElapsed()
         }
     }
@@ -430,7 +539,11 @@ public actor GeminiLiveSession: LiveTranscribing {
     private func scheduleGrace() {
         graceTask?.cancel()
         graceTask = Task {
-            try? await Task.sleep(for: .seconds(Self.finalGraceSeconds))
+            do {
+                try await Task.sleep(for: .seconds(self.finalGraceSeconds))
+            } catch {
+                return
+            }
             self.graceElapsed()
         }
     }
@@ -487,10 +600,9 @@ public actor GeminiLiveSession: LiveTranscribing {
     private func closeSocket() {
         receiveTask?.cancel()
         receiveTask = nil
-        if let socket {
-            self.socket = nil
-            socket.cancel(with: .normalClosure, reason: nil)
-        }
+        guard !socketClosed else { return }
+        socketClosed = true
+        socket.cancel()
     }
 
     private func redacted(_ text: String) -> String {
