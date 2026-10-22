@@ -12,6 +12,15 @@ public enum TurnContext {
     public static let scanLimit = 8_000
     public static let maxTermLength = 80
 
+    /// Whether the focused element is a password field and its text must not be read.
+    ///
+    /// Password fields report role `AXTextField` with subrole `AXSecureTextField`
+    /// (`kAXSecureTextFieldSubrole`). There is no `kAXSecureTextFieldRole`. A role
+    /// of `AXSecureTextField` is also treated as secure.
+    public static func isSecureField(role: String?, subrole: String?) -> Bool {
+        role == "AXSecureTextField" || subrole == "AXSecureTextField"
+    }
+
     /// Names, CamelCase, snake_case, and file names, in appearance order.
     /// Personal names come only from the window title, so a chat draft cannot
     /// fill the list. Exact duplicates are dropped.

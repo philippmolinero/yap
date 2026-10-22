@@ -25,7 +25,11 @@ enum FocusedContextReader {
     }
 
     private static func isSecure(_ element: AXUIElement) -> Bool {
-        copyString(element, kAXRoleAttribute as CFString) == kAXSecureTextFieldRole as String
+        let role = copyString(element, kAXRoleAttribute as CFString)
+        let subrole = copyString(element, kAXSubroleAttribute as CFString)
+        // Password fields are AXTextField with subrole kAXSecureTextFieldSubrole.
+        if subrole == kAXSecureTextFieldSubrole as String { return true }
+        return TurnContext.isSecureField(role: role, subrole: subrole)
     }
 
     private static func windowTitle(of element: AXUIElement) -> String {

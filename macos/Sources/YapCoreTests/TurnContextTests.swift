@@ -8,6 +8,16 @@ private func decode(_ data: Data) throws -> [String: Any] {
 func turnContextSuite() -> Suite {
     let suite = Suite("Turn-local context")
 
+    suite.test("password fields are secure and ordinary fields are not") {
+        try expect(TurnContext.isSecureField(role: "AXTextField", subrole: "AXSecureTextField"))
+        try expect(TurnContext.isSecureField(role: "AXSecureTextField", subrole: nil))
+        try expect(TurnContext.isSecureField(role: "AXSecureTextField", subrole: "AXStandardWindow"))
+        try expect(!TurnContext.isSecureField(role: "AXTextField", subrole: nil))
+        try expect(!TurnContext.isSecureField(role: "AXTextArea", subrole: nil))
+        try expect(!TurnContext.isSecureField(role: "AXTextField", subrole: "AXSearchField"))
+        try expect(!TurnContext.isSecureField(role: nil, subrole: nil))
+    }
+
     suite.test("editor tokens and the window name are kept in order") {
         let terms = TurnContext.terms(
             focusedText: "Please open TaskFilters in task_list.tsx and use_task_filters.",
