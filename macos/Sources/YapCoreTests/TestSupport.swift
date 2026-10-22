@@ -87,6 +87,7 @@ func allSuites() -> [Suite] {
         wavSuite(),
         historySuite(),
         metricsSuite(),
+        metricsSummarySuite(),
         languageSuite(),
         geminiMessageSuite(),
         geminiLiveSuite(),
