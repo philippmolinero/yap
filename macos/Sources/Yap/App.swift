@@ -12,6 +12,9 @@ enum YapMain {
         if arguments.contains("--doctor") {
             exit(DoctorCommand.run())
         }
+        if arguments.contains("--metrics") {
+            exit(MetricsCommand.run(arguments: arguments))
+        }
 
         guard SingleInstanceLock.acquire() else {
             fputs("Yap is already running.\n", stderr)
