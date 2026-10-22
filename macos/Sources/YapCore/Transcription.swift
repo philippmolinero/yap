@@ -66,9 +66,22 @@ public protocol LiveTranscribing: AnyObject, Sendable {
 
 /// A transcription backend. `makeLiveSession` returns nil when the provider
 /// cannot stream during the hold.
+///
+/// `vocabulary` is extra terms for this call only (focused-field context).
+/// An empty list means the backend's saved vocabulary.
 public protocol Transcribing: Sendable {
     var providerName: String { get }
     var modelName: String { get }
-    func makeLiveSession() -> (any LiveTranscribing)?
-    func transcribe(wav: Data) async throws -> TranscriptionResult
+    func makeLiveSession(vocabulary: [String]) -> (any LiveTranscribing)?
+    func transcribe(wav: Data, vocabulary: [String]) async throws -> TranscriptionResult
+}
+
+public extension Transcribing {
+    func makeLiveSession() -> (any LiveTranscribing)? {
+        makeLiveSession(vocabulary: [])
+    }
+
+    func transcribe(wav: Data) async throws -> TranscriptionResult {
+        try await transcribe(wav: wav, vocabulary: [])
+    }
 }

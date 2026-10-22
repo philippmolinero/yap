@@ -78,6 +78,8 @@ public actor DictationPipeline {
     private let metrics: any MetricsWriting
     private let events: PipelineEvents
     private let pasteTargetProvider: @Sendable () -> PasteTarget?
+    /// Turn-local vocabulary. Empty when the Settings switch is off.
+    private let contextTermsProvider: @Sendable () -> [String]
     private let pasteDelay: TimeInterval
     private let failedRecordingURL: URL?
 
@@ -88,6 +90,8 @@ public actor DictationPipeline {
     private var frameContinuation: AsyncStream<Data>.Continuation?
     private var frameTask: Task<Void, Never>?
     private var pasteTarget: PasteTarget?
+    /// Screen tokens captured at key down. Cleared when the turn ends.
+    private var contextTerms: [String] = []
     private var failedWAV: Data?
 
     public init(
@@ -98,6 +102,7 @@ public actor DictationPipeline {
         metrics: any MetricsWriting = FileMetricsWriter(),
         events: PipelineEvents = PipelineEvents(),
         pasteTargetProvider: @escaping @Sendable () -> PasteTarget? = { nil },
+        contextTermsProvider: @escaping @Sendable () -> [String] = { [] },
         pasteDelay: TimeInterval = 0.05,
         failedRecordingURL: URL? = AppConfig.failedRecordingURL
     ) {
@@ -108,6 +113,7 @@ public actor DictationPipeline {
         self.metrics = metrics
         self.events = events
         self.pasteTargetProvider = pasteTargetProvider
+        self.contextTermsProvider = contextTermsProvider
         self.pasteDelay = pasteDelay
         self.failedRecordingURL = failedRecordingURL
     }
@@ -126,9 +132,14 @@ public actor DictationPipeline {
         activeRecordingID = recordingIDSequence
         let recordingID = recordingIDSequence
         pasteTarget = pasteTargetProvider()
+        let terms = contextTermsProvider()
+        contextTerms = terms
+        if !terms.isEmpty {
+            YapLog.info("turn context terms=\(terms.count)")
+        }
 
         var session: (any LiveTranscribing)?
-        if let opened = transcriber.makeLiveSession() {
+        if let opened = transcriber.makeLiveSession(vocabulary: terms) {
             session = opened
             liveSession = opened
             await opened.start()
@@ -161,6 +172,8 @@ public actor DictationPipeline {
         } catch {
             YapLog.error("Recorder start failed [source=\(source) recording=\(recordingID)]: \(error.localizedDescription)")
             liveSession = nil
+            contextTerms = []
+            pasteTarget = nil
             frameContinuation?.finish()
             frameContinuation = nil
             frameTask = nil
@@ -184,9 +197,11 @@ public actor DictationPipeline {
 
         let recordingID = activeRecordingID
         let target = pasteTarget
+        let terms = contextTerms
         let session = liveSession
         liveSession = nil
         pasteTarget = nil
+        contextTerms = []
         frameContinuation?.finish()
         frameContinuation = nil
         let pendingFrames = frameTask
@@ -243,6 +258,7 @@ public actor DictationPipeline {
             startedAt: startedAt,
             target: target,
             session: session,
+            vocabulary: terms,
             fromRetry: false
         )
         return true
@@ -261,6 +277,7 @@ public actor DictationPipeline {
         let session = liveSession
         liveSession = nil
         pasteTarget = nil
+        contextTerms = []
         frameContinuation?.finish()
         frameContinuation = nil
         let pendingFrames = frameTask
@@ -307,6 +324,7 @@ public actor DictationPipeline {
             startedAt: Self.now(),
             target: nil,
             session: nil,
+            vocabulary: [],
             fromRetry: true
         )
         return true
@@ -322,6 +340,7 @@ public actor DictationPipeline {
         startedAt: TimeInterval,
         target: PasteTarget?,
         session: (any LiveTranscribing)?,
+        vocabulary: [String],
         fromRetry: Bool
     ) async {
         let transcriptionStarted = Self.now()
@@ -349,7 +368,7 @@ public actor DictationPipeline {
 
         if result == nil {
             do {
-                result = try await transcriber.transcribe(wav: wav)
+                result = try await transcriber.transcribe(wav: wav, vocabulary: vocabulary)
             } catch {
                 YapLog.error(
                     "Transcription failed [provider=\(transcriber.providerName) model=\(transcriber.modelName) source=\(source)]: \(error)"

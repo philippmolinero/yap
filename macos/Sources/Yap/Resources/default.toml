@@ -22,3 +22,6 @@ delay_ms = 50
 [silence]
 timeout = 5.0                  # seconds of silence before auto-stop (0 = disabled)
 threshold = 0.008              # RMS level below this counts as silence
+
+[context]
+enabled = false                # names and code from the focused field, this turn only
