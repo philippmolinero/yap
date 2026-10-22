@@ -48,8 +48,11 @@ silence auto-stop, clipboard-only paste).
 
 ```sh
 Yap.app/Contents/MacOS/Yap --doctor              # config, key source, permissions
+Yap.app/Contents/MacOS/Yap --metrics             # p50/p95 of release-to-paste timings
 Yap.app/Contents/MacOS/Yap --transcribe file.wav # stream a file through the live pipeline
 ```
+
+`--metrics` reads `pipeline_metrics.jsonl` and prints counts, p50, and p95. It does not print dictation text, and it works while the menu-bar app is running. The number to read for the live path is `live path, successful` → `total_s`: time from key release until the transcript is on the clipboard. `transcription_s` is the Gemini wait inside that. `Last 24 hours` is the recent window when the file also holds older rows.
 
 `--transcribe` is the end-to-end check for the transcription chain.
 

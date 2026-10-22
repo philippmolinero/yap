@@ -192,6 +192,7 @@ enum DoctorCommand {
 
         report("trigger keys", config.hotkey.keycodes.map(String.init).joined(separator: ", "), good: true)
         report("mode", config.transcription.mode.rawValue, good: true)
+        report("metrics", "Yap --metrics", good: true)
         return ok ? 0 : 1
     }
 }
