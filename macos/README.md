@@ -63,6 +63,9 @@ Lives in `~/.config/yap/` and is shared with older Yap versions:
 - `config.toml` — trigger keys, mode (`smart`/`verbatim`), language hint,
   silence auto-stop, paste delay. Settings rewrites only the keys Yap manages.
 - `vocabulary.txt` — preferred spellings sent as Gemini custom vocabulary.
+  Settings → Context can also send names and code from the focused field for
+  the current turn only. The switch is off until you turn it on, and those
+  words are not saved.
 - `history.json`, `pipeline_metrics.jsonl` (timings only, never text), `yap.log`
 
 The Gemini API key is stored in the **Keychain** (`com.yap.dictation.gemini-key`).
@@ -81,7 +84,7 @@ variables `GEMINI_API_KEY`/`GOOGLE_API_KEY` work as a development fallback.
 |-------------------|-----|
 | Input Monitoring  | hearing the trigger key system-wide |
 | Microphone        | dictation |
-| Accessibility     | posting Cmd+V into the focused app |
+| Accessibility     | posting Cmd+V into the focused app, and reading that field when Context is on |
 
 The Settings pane shows all three with request/open buttons; the menu status
 line reports what is missing.

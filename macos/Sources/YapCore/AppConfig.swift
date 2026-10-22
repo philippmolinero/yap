@@ -55,6 +55,15 @@ public struct PasteConfig: Sendable, Equatable {
     public var delay: TimeInterval { TimeInterval(delayMS) / 1000 }
 }
 
+public struct ContextConfig: Sendable, Equatable {
+    /// When on, the focused field and window title lend terms to this turn only.
+    public var enabled: Bool
+
+    public init(enabled: Bool = false) {
+        self.enabled = enabled
+    }
+}
+
 public struct SilenceConfig: Sendable, Equatable {
     /// Seconds of quiet that auto-stop a recording. Zero disables the feature.
     public var timeout: Double
@@ -72,6 +81,7 @@ public struct AppConfig: Sendable, Equatable {
     public var transcription: TranscriptionConfig
     public var paste: PasteConfig
     public var silence: SilenceConfig
+    public var context: ContextConfig
     public var vocabulary: [String]
 
     public init(
@@ -79,12 +89,14 @@ public struct AppConfig: Sendable, Equatable {
         transcription: TranscriptionConfig = .default,
         paste: PasteConfig = PasteConfig(),
         silence: SilenceConfig = SilenceConfig(),
+        context: ContextConfig = ContextConfig(),
         vocabulary: [String] = []
     ) {
         self.hotkey = hotkey
         self.transcription = transcription
         self.paste = paste
         self.silence = silence
+        self.context = context
         self.vocabulary = vocabulary
     }
 
@@ -137,6 +149,7 @@ public extension AppConfig {
         )
 
         let paste = PasteConfig(delayMS: document.int("delay_ms", in: "paste") ?? 50)
+        let context = ContextConfig(enabled: document.bool("enabled", in: "context") ?? false)
         let silence = SilenceConfig(
             timeout: document.double("timeout", in: "silence") ?? 5.0,
             threshold: document.double("threshold", in: "silence") ?? 0.008
@@ -147,6 +160,7 @@ public extension AppConfig {
             transcription: transcription,
             paste: paste,
             silence: silence,
+            context: context,
             vocabulary: loadVocabulary(from: directory)
         )
     }
@@ -166,6 +180,8 @@ public extension AppConfig {
         document.set(.array(transcription.allowedLanguages.map { .string($0) }), forKey: "allowed_languages", in: "transcription")
 
         document.set(.integer(paste.delayMS), forKey: "delay_ms", in: "paste")
+
+        document.set(.bool(context.enabled), forKey: "enabled", in: "context")
 
         document.set(.double(silence.timeout), forKey: "timeout", in: "silence")
         document.set(.double(silence.threshold), forKey: "threshold", in: "silence")

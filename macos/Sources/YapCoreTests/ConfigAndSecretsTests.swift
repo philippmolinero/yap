@@ -25,6 +25,7 @@ func configSuite() -> Suite {
         try expect(config.paste.delayMS == 50)
         try expect(config.silence.timeout == 5.0)
         try expect(config.silence.threshold == 0.008)
+        try expect(!config.context.enabled, "a missing context section stays off")
         try expect(config.vocabulary.isEmpty)
     }
 
@@ -60,6 +61,7 @@ func configSuite() -> Suite {
         try expect(config.transcription.allowedLanguages == ["en", "de", "th"])
         try expect(config.paste.delayMS == 120)
         try expect(config.silence.timeout == 0)
+        try expect(!config.context.enabled)
         try expect(config.vocabulary == ["Claude Code", "Yap"])
     }
 
@@ -81,6 +83,7 @@ func configSuite() -> Suite {
         config.transcription.mode = .verbatim
         config.transcription.language = "th"
         config.silence.timeout = 8
+        config.context.enabled = true
         try config.save(in: directory)
 
         let reloaded = AppConfig.load(from: directory)
@@ -88,11 +91,33 @@ func configSuite() -> Suite {
         try expect(reloaded.transcription.mode == .verbatim)
         try expect(reloaded.transcription.language == "th")
         try expect(reloaded.silence.timeout == 8)
+        try expect(reloaded.context.enabled)
 
         let text = try String(contentsOf: directory.appendingPathComponent("config.toml"), encoding: .utf8)
         try expect(text.contains("# my comment"), "comments survive a save")
         try expect(text.contains("[cleanup]"), "foreign sections survive a save")
         try expect(text.contains("provider = \"groq\""))
+        try expect(text.contains("enabled = true"))
+    }
+
+    suite.test("context switch defaults off and round trips") {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        var config = AppConfig.load(from: directory)
+        try expect(!config.context.enabled)
+        try config.save(in: directory)
+        let seeded = try String(contentsOf: directory.appendingPathComponent("config.toml"), encoding: .utf8)
+        try expect(seeded.contains("[context]"))
+        try expect(seeded.contains("enabled = false"))
+
+        config.context.enabled = true
+        try config.save(in: directory)
+        try expect(AppConfig.load(from: directory).context.enabled)
+
+        config.context.enabled = false
+        try config.save(in: directory)
+        try expect(!AppConfig.load(from: directory).context.enabled)
     }
 
     suite.test("seeds default files only when missing") {

@@ -32,6 +32,17 @@ public struct GeminiConfiguration: Sendable, Equatable {
                 .prefix(Self.vocabularyLimit)
         )
     }
+
+    /// A copy whose vocabulary is the turn's context tokens followed by the
+    /// saved list, still capped at `vocabularyLimit`. An empty extra list
+    /// returns this configuration unchanged.
+    public func addingContext(_ extra: [String]) -> GeminiConfiguration {
+        let merged = TurnContext.merge(context: extra, saved: vocabulary, limit: Self.vocabularyLimit)
+        guard merged != vocabulary else { return self }
+        var copy = self
+        copy.vocabulary = merged
+        return copy
+    }
 }
 
 /// Pure message shaping for both Gemini endpoints. Kept free of I/O so every
@@ -162,17 +173,18 @@ public struct GeminiTranscriber: Transcribing {
     public var providerName: String { "gemini" }
     public var modelName: String { configuration.unaryModel }
 
-    public func makeLiveSession() -> (any LiveTranscribing)? {
-        GeminiLiveSession(configuration: configuration)
+    public func makeLiveSession(vocabulary: [String]) -> (any LiveTranscribing)? {
+        GeminiLiveSession(configuration: configuration.addingContext(vocabulary))
     }
 
-    public func transcribe(wav: Data) async throws -> TranscriptionResult {
+    public func transcribe(wav: Data, vocabulary: [String]) async throws -> TranscriptionResult {
+        let active = configuration.addingContext(vocabulary)
         var request = URLRequest(url: GeminiMessage.unaryURL)
         request.httpMethod = "POST"
         request.timeoutInterval = 45
-        request.setValue(configuration.apiKey, forHTTPHeaderField: "x-goog-api-key")
+        request.setValue(active.apiKey, forHTTPHeaderField: "x-goog-api-key")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = GeminiMessage.unaryRequest(wav: wav, config: configuration)
+        request.httpBody = GeminiMessage.unaryRequest(wav: wav, config: active)
 
         let startedAt = Date()
         let data = try await client.send(request)
