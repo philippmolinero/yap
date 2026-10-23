@@ -39,14 +39,25 @@ final class SoundFeedback: @unchecked Sendable {
         errorSound = NSSound(named: "Basso")
     }
 
-    /// Rising chime — played once the first audio frame arrives.
+    /// Rising chime — played the moment listening starts, not after the first frame.
     func playStart() {
         play(startSound)
     }
 
-    /// Falling chime — recording ended, transcription begins.
+    /// Falling chime — the key came up. Cuts the start chime if it is still playing.
     func playStop() {
-        play(stopSound)
+        DispatchQueue.main.async {
+            self.startSound?.stop()
+            guard let stopSound = self.stopSound else { return }
+            stopSound.stop()
+            stopSound.play()
+        }
+    }
+
+    func stopStart() {
+        DispatchQueue.main.async {
+            self.startSound?.stop()
+        }
     }
 
     func playError() {

@@ -22,6 +22,12 @@
     <string>public.app-category.productivity</string>
     <key>LSUIElement</key>
     <true/>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Yap listens for your iPhone so it can dictate from the phone's microphone.</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_yap._tcp</string>
+    </array>
     <key>NSMicrophoneUsageDescription</key>
     <string>Yap needs microphone access for voice dictation.</string>
     <key>NSInputMonitoringUsageDescription</key>

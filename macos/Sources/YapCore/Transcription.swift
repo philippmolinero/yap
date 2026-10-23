@@ -18,11 +18,20 @@ public struct TranscriptionResult: Sendable, Equatable, Codable {
     public var text: String
     public var language: String
     public var latency: TimeInterval
+    /// The server produced its own reply and no transcript of the speaker.
+    /// Callers must not paste that reply and must not ask another model to try.
+    public var modelReplyOnly: Bool
 
-    public init(text: String, language: String = "", latency: TimeInterval = 0) {
+    public init(
+        text: String,
+        language: String = "",
+        latency: TimeInterval = 0,
+        modelReplyOnly: Bool = false
+    ) {
         self.text = text
         self.language = language
         self.latency = latency
+        self.modelReplyOnly = modelReplyOnly
     }
 }
 

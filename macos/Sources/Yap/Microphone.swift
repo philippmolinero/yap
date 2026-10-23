@@ -18,7 +18,8 @@ final class Microphone: AudioRecording, @unchecked Sendable {
     }
 
     private let lock = NSLock()
-    private let engine = AVAudioEngine()
+    /// Rebuilt on every press so a system mic change cannot make installTap abort the app.
+    private var engine = AVAudioEngine()
     private var converter: AVAudioConverter?
     private var chunks: [Data] = []
     private var callbacks: Callbacks?
@@ -42,6 +43,10 @@ final class Microphone: AudioRecording, @unchecked Sendable {
     /// Current amplified level from 0.0 (quiet) to 1.0 (loud).
     var audioLevel: Double { lock.withLock { levelValue } }
 
+    /// The input device stays off until a press. Starting it here would leave
+    /// the system microphone indicator on for the whole time Yap is open.
+    func warm() {}
+
     private var targetFormat: AVAudioFormat {
         AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: 1, interleaved: false)!
     }
@@ -63,9 +68,10 @@ final class Microphone: AudioRecording, @unchecked Sendable {
             callbacks = Callbacks(onFrame: onFrame, onFirstFrame: onFirstFrame, onSilence: onSilence)
         }
 
+        retireEngine()
         let input = engine.inputNode
         let inputFormat = input.outputFormat(forBus: 0)
-        guard inputFormat.sampleRate > 0 else {
+        guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
             lock.withLock { callbacks = nil }
             throw CaptureError(message: "no audio input available")
         }
@@ -78,14 +84,16 @@ final class Microphone: AudioRecording, @unchecked Sendable {
         input.installTap(onBus: 0, bufferSize: 2048, format: inputFormat) { [weak self] buffer, _ in
             self?.consume(buffer)
         }
-        engine.prepare()
-        do {
-            try engine.start()
-        } catch {
-            input.removeTap(onBus: 0)
-            self.converter = nil
-            lock.withLock { callbacks = nil }
-            throw CaptureError(message: error.localizedDescription)
+        if !engine.isRunning {
+            engine.prepare()
+            do {
+                try engine.start()
+            } catch {
+                input.removeTap(onBus: 0)
+                self.converter = nil
+                lock.withLock { callbacks = nil }
+                throw CaptureError(message: error.localizedDescription)
+            }
         }
         lock.withLock { active = true }
         YapLog.info("Microphone started")
@@ -105,10 +113,20 @@ final class Microphone: AudioRecording, @unchecked Sendable {
             return (data, wasActive)
         }
         engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
         converter = nil
+        if engine.isRunning {
+            engine.stop()
+        }
         YapLog.info("Microphone stopped active=\(wasActive) bytes=\(pcm.count)")
         return WAVCodec.encodeMonoPCM16(pcm, sampleRate: Int(sampleRate))
+    }
+
+    /// Drop the engine so the next press binds to the current input device.
+    private func retireEngine() {
+        if engine.isRunning {
+            engine.stop()
+        }
+        engine = AVAudioEngine()
     }
 
     func forceStop() {
@@ -122,8 +140,10 @@ final class Microphone: AudioRecording, @unchecked Sendable {
             callbacks = nil
         }
         engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
         converter = nil
+        if engine.isRunning {
+            engine.stop()
+        }
     }
 
     // MARK: - Audio tap

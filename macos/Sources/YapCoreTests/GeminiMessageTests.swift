@@ -50,7 +50,6 @@ func geminiMessageSuite() -> Suite {
         let setup = try require(message["setup"] as? [String: Any])
         let transcription = try require(setup["inputAudioTranscription"] as? [String: Any])
         try expect(transcription["mode"] as? String == "VERBATIM")
-
         let vocabulary = try require(transcription["customVocabulary"] as? [String])
         try expect(vocabulary.count == 100)
     }
@@ -88,8 +87,7 @@ func geminiMessageSuite() -> Suite {
         let generation = try require(request["generation_config"] as? [String: Any])
         let transcription = try require(generation["transcription_config"] as? [String: Any])
         try expect(transcription["language_codes"] as? [String] == ["de-DE"])
-        let mode = try require(transcription["mode"] as? [String: Any])
-        try expect(mode["type"] as? String == "smart")
+        try expect(transcription["mode"] as? String == "smart")
         try expect(transcription["custom_vocabulary"] as? [String] == ["Yap"])
     }
 

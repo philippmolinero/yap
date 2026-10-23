@@ -30,6 +30,15 @@ final class AppModel {
     private let overlay = OverlayWindowController()
     private let systemEvents = SystemEvents()
     private var microphone: Microphone
+    private let remoteMicrophone: RemoteMicrophone
+    private let router: CaptureRouter
+    private let phoneLink: PhoneListener
+    private var phoneEvents: Task<Void, Never>?
+    /// Set while an iPhone press owns the pipeline, so a disconnect can tell
+    /// that recording apart from a hotkey press.
+    private var phonePress: Int?
+    var phonePIN = ""
+    var phoneName: String?
     private var hotkey: HotkeyMonitor
     private var pipeline: DictationPipeline!
     private var permissionTimer: Timer?
@@ -54,10 +63,18 @@ final class AppModel {
         self.keyStore = keyStore
         self.apiKeyDraft = apiKey
         self.missingAPIKey = apiKey.isEmpty
-        self.microphone = Microphone(
+        let microphone = Microphone(
             silenceTimeout: config.silence.timeout,
             silenceThreshold: config.silence.threshold
         )
+        let remoteMicrophone = RemoteMicrophone()
+        let router = CaptureRouter(local: microphone, phone: remoteMicrophone)
+        let phoneLink = PhoneListener(microphone: remoteMicrophone)
+        self.microphone = microphone
+        self.remoteMicrophone = remoteMicrophone
+        self.router = router
+        self.phoneLink = phoneLink
+        self.phonePIN = phoneLink.currentPIN
         self.hotkey = HotkeyMonitor(
             keycodes: config.hotkey.keycodes,
             doubleTapMS: config.hotkey.doubleTapMS
@@ -101,6 +118,15 @@ final class AppModel {
             statusText = "Needs Input Monitoring"
             startPermissionPolling()
         }
+        phoneLink.start()
+        phoneEvents = Task { @MainActor in
+            for await event in self.phoneLink.events {
+                await self.handlePhone(event)
+            }
+        }
+        if Permissions.isGranted(.microphone) {
+            Task { await self.pipeline.warmCapture() }
+        }
         if missingAPIKey {
             statusText = "Missing API Key"
             openSettings()
@@ -108,6 +134,12 @@ final class AppModel {
     }
 
     // MARK: - Hotkey
+
+    private var pressID = 0
+    /// Listening UI is tied to the trigger, not to microphone setup or the release tail.
+    private var listeningWanted = false
+    /// The Mac key is driving the iPhone mic for this press.
+    private var hotkeyDrivesPhone = false
 
     private func wireHotkey(_ monitor: HotkeyMonitor) {
         monitor.onDown = { [weak self] in self?.handleTriggerDown() }
@@ -118,6 +150,20 @@ final class AppModel {
         guard !missingAPIKey else {
             statusText = "Missing API Key"
             openSettings()
+            return
+        }
+        if phoneName != nil {
+            pressID += 1
+            let id = pressID
+            hotkeyDrivesPhone = true
+            listeningWanted = true
+            Task { @MainActor in
+                guard self.hotkeyDrivesPhone, self.pressID == id, self.listeningWanted else { return }
+                self.statusText = "Recording"
+                self.sounds.playStart()
+                self.showListening()
+                self.phoneLink.beginCapture()
+            }
             return
         }
         guard Permissions.isGranted(.microphone) else {
@@ -133,11 +179,55 @@ final class AppModel {
             }
             return
         }
-        Task { await self.pipeline.start(source: "hotkey_down") }
+        pressID += 1
+        let id = pressID
+        listeningWanted = true
+        // The hotkey callback is inside the event tap. Showing the panel here
+        // swallows the key-up, so the trigger stays down. Hop off the tap first.
+        Task { @MainActor in
+            await self.beginListening(pressID: id)
+        }
     }
 
     private func handleTriggerUp() {
-        Task { await self.pipeline.stopAndProcess(source: "hotkey_up") }
+        let id = pressID
+        listeningWanted = false
+        if hotkeyDrivesPhone {
+            Task { @MainActor in
+                self.endListeningFeedback()
+                self.phoneLink.endCapture()
+            }
+            return
+        }
+        Task { @MainActor in
+            self.endListeningFeedback()
+            await self.pipeline.stopAndProcess(source: "hotkey_up", pressID: id)
+        }
+    }
+
+    private func beginListening(pressID id: Int) async {
+        let ticket = router.claim(.local)
+        guard listeningWanted, pressID == id else {
+            let started = await pipeline.start(source: "hotkey_down", pressID: id)
+            if !started { router.cancelClaim(ticket) }
+            return
+        }
+        isRecording = true
+        isProcessing = false
+        statusText = "Recording"
+        sounds.playStart()
+        showListening()
+        let started = await pipeline.start(source: "hotkey_down", pressID: id)
+        if !started { router.cancelClaim(ticket) }
+        if !listeningWanted {
+            endListeningFeedback()
+        }
+    }
+
+    private func showListening() {
+        overlay.show(.recording, label: "Listening", level: { [weak self] in
+            MainActor.assumeIsolated { self?.router.audioLevel ?? 0 }
+        })
     }
 
     // MARK: - Pipeline events
@@ -147,9 +237,10 @@ final class AppModel {
             onStateChange: { [weak self] state in
                 Task { @MainActor in self?.applyPipelineState(state) }
             },
-            onFirstFrame: { [weak self] in
-                Task { @MainActor in self?.sounds.playStart() }
+            onListeningEnded: { [weak self] in
+                Task { @MainActor in self?.endListeningFeedback() }
             },
+            onFirstFrame: {},
             onNotice: { [weak self] reason in
                 Task { @MainActor in self?.applyNotice(reason) }
             },
@@ -162,7 +253,7 @@ final class AppModel {
         )
         let contextEnabled = config.context.enabled
         return DictationPipeline(
-            recorder: microphone,
+            recorder: router,
             transcriber: makeTranscriber(),
             paster: paster,
             history: history,
@@ -201,19 +292,19 @@ final class AppModel {
             isRecording = true
             isProcessing = false
             statusText = "Recording"
-            overlay.show(.recording, label: "Listening", level: { [weak self] in
-                MainActor.assumeIsolated { self?.microphone.audioLevel ?? 0 }
-            })
+            guard listeningWanted, overlay.model.state != .recording else { return }
+            sounds.playStart()
+            showListening()
         case .processing:
             isRecording = false
             isProcessing = true
             statusText = "Transcribing"
-            sounds.playStop()
             overlay.show(.processing, label: "Transcribing", level: { 0 })
         case .idle:
             isRecording = false
             isProcessing = false
             statusText = missingAPIKey ? "Missing API Key" : "Idle"
+            sounds.stopStart()
             overlay.hide()
             refreshFailed()
             if pendingRebuild {
@@ -223,6 +314,14 @@ final class AppModel {
         }
     }
 
+    /// Listening UI tracks the key. The audio tail after release stays silent.
+    private func endListeningFeedback() {
+        listeningWanted = false
+        guard overlay.model.state == .recording else { return }
+        sounds.playStop()
+        overlay.hide()
+    }
+
     private func applyNotice(_ reason: String) {
         statusText = reason
     }
@@ -230,7 +329,7 @@ final class AppModel {
     private func handleDictationError(_ reason: String) {
         YapLog.warning("Pipeline error: \(reason)")
         sounds.playError()
-        statusText = "Transcription failed"
+        statusText = reason == "model_reply" ? "Discarded a reply" : "Transcription failed"
     }
 
     private func handleDictationComplete() {
@@ -367,11 +466,12 @@ final class AppModel {
             pendingRebuild = true
             return
         }
-        microphone.forceStop()
-        microphone = Microphone(
+        let microphone = Microphone(
             silenceTimeout: config.silence.timeout,
             silenceThreshold: config.silence.threshold
         )
+        self.microphone = microphone
+        router.replaceLocal(microphone)
         pipeline = buildPipeline()
     }
 
@@ -465,9 +565,95 @@ final class AppModel {
     private func cleanup() {
         systemEvents.stop()
         hotkey.stopTap()
+        phoneEvents?.cancel()
+        phoneEvents = nil
+        phoneLink.stop()
         permissionTimer?.invalidate()
         permissionTimer = nil
         SingleInstanceLock.release()
+    }
+
+    // MARK: - iPhone mic
+
+    private func handlePhone(_ event: PhoneEvent) async {
+        switch event {
+        case .status(let pin, let name):
+            phonePIN = pin
+            phoneName = name
+        case .down:
+            await phoneDown()
+        case .up:
+            await phoneUp()
+        case .lost:
+            await phoneLost()
+        }
+    }
+
+    private func phoneDown() async {
+        guard !missingAPIKey else {
+            remoteMicrophone.disarm()
+            statusText = "Missing API Key"
+            openSettings()
+            return
+        }
+        guard !isRecording else {
+            remoteMicrophone.disarm()
+            YapLog.info("iPhone press ignored — already recording")
+            return
+        }
+        if !hotkeyDrivesPhone {
+            pressID += 1
+        }
+        let id = pressID
+        phonePress = id
+        let ticket = router.claim(.phone)
+        isRecording = true
+        isProcessing = false
+        if !hotkeyDrivesPhone {
+            listeningWanted = true
+            statusText = "Recording"
+            sounds.playStart()
+            showListening()
+        }
+        let started = await pipeline.start(source: "iphone", pressID: id)
+        if !started {
+            router.cancelClaim(ticket)
+            if phonePress == id { phonePress = nil }
+            remoteMicrophone.disarm()
+        }
+        if !listeningWanted {
+            endListeningFeedback()
+        }
+    }
+
+    private func phoneUp() async {
+        hotkeyDrivesPhone = false
+        guard let id = phonePress else { return }
+        phonePress = nil
+        listeningWanted = false
+        endListeningFeedback()
+        await pipeline.stopAndProcess(source: "iphone_up", pressID: id, linger: 0)
+    }
+
+    private func phoneLost() async {
+        hotkeyDrivesPhone = false
+        guard phonePress != nil else { return }
+        phonePress = nil
+        listeningWanted = false
+        endListeningFeedback()
+        await pipeline.cancel(source: "iphone_disconnect")
+        statusText = "iPhone disconnected"
+    }
+
+    func copyPhoneCode() {
+        guard !phonePIN.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(phonePIN, forType: .string)
+    }
+
+    func newPhoneCode() {
+        phonePIN = phoneLink.regeneratePIN()
+        phoneName = nil
     }
 }
 

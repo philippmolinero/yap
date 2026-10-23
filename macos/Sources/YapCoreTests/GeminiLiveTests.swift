@@ -148,5 +148,111 @@ func geminiLiveSuite() -> Suite {
         try expect(socket.sent.map(messageKind).contains("activityEnd"))
     }
 
+    suite.test("a model reply is not the transcript") {
+        let socket = ScriptedLiveSocket()
+        let session = GeminiLiveSession(
+            configuration: GeminiConfiguration(apiKey: "secret"),
+            socket: socket,
+            setupTimeout: 2,
+            finalTimeout: 5,
+            grace: 0.2,
+            modelReplyWait: 0.2
+        )
+        socket.onSend = { text in
+            if text.contains("\"setup\"") {
+                socket.push(#"{"setupComplete":{}}"#)
+            }
+            if text.contains("activityEnd") {
+                socket.push(
+                    #"{"serverContent":{"interimInputTranscription":{"text":"How are you?","languageCode":"en"}}}"#
+                )
+                socket.push(
+                    #"{"serverContent":{"modelTurn":{"parts":[{"text":"I'm good."}]},"outputTranscription":{"text":"I'm good."}}}"#
+                )
+                socket.push(#"{"serverContent":{"turnComplete":true}}"#)
+            }
+        }
+
+        await session.start()
+        await session.write(Data([1, 2, 0, 0]))
+        let started = Date()
+        let result = try await session.finish()
+
+        try expect(result.text == "How are you?")
+        try expect(result.language == "en")
+        try expect(!result.modelReplyOnly)
+        try expect(!result.text.localizedCaseInsensitiveContains("good"))
+        let elapsed = Date().timeIntervalSince(started)
+        try expect(elapsed < 1.5, "model reply held the spinner for \(elapsed)s")
+    }
+
+    suite.test("a reply with no speaker transcript is discarded quickly") {
+        let socket = ScriptedLiveSocket()
+        let session = GeminiLiveSession(
+            configuration: GeminiConfiguration(apiKey: "secret"),
+            socket: socket,
+            setupTimeout: 2,
+            finalTimeout: 5,
+            grace: 0.2,
+            modelReplyWait: 0.2
+        )
+        socket.onSend = { text in
+            if text.contains("\"setup\"") {
+                socket.push(#"{"setupComplete":{}}"#)
+            }
+            if text.contains("activityEnd") {
+                socket.push(
+                    #"{"serverContent":{"modelTurn":{"parts":[{"text":"I'm good."}]}}}"#
+                )
+                socket.push(
+                    #"{"serverContent":{"modelTurn":{"parts":[{"text":"I'm good. How can I help?"}]}}}"#
+                )
+            }
+        }
+
+        await session.start()
+        await session.write(Data([1, 2, 0, 0]))
+        let started = Date()
+        let result = try await session.finish()
+
+        try expect(result.text.isEmpty)
+        try expect(result.modelReplyOnly)
+        let elapsed = Date().timeIntervalSince(started)
+        try expect(elapsed < 1.5, "reply-only turn held the spinner for \(elapsed)s")
+    }
+
+    suite.test("interim transcript is used when no final arrives") {
+        let socket = ScriptedLiveSocket()
+        let session = GeminiLiveSession(
+            configuration: GeminiConfiguration(apiKey: "secret"),
+            socket: socket,
+            setupTimeout: 2,
+            finalTimeout: 5,
+            grace: 0.2,
+            modelReplyWait: 2
+        )
+        socket.onSend = { text in
+            if text.contains("\"setup\"") {
+                socket.push(#"{"setupComplete":{}}"#)
+            }
+            if text.contains("activityEnd") {
+                socket.push(
+                    #"{"serverContent":{"interimInputTranscription":{"text":"How are"}}}"#
+                )
+                socket.push(
+                    #"{"serverContent":{"interimInputTranscription":{"text":"How are you?"}}}"#
+                )
+                socket.push(#"{"serverContent":{"turnComplete":true}}"#)
+            }
+        }
+
+        await session.start()
+        await session.write(Data([1, 2, 0, 0]))
+        let result = try await session.finish()
+
+        try expect(result.text == "How are you?")
+        try expect(!result.modelReplyOnly)
+    }
+
     return suite
 }

@@ -72,6 +72,7 @@ final class FakeLiveSession: LiveTranscribing, @unchecked Sendable {
     private(set) var startCount = 0
     private(set) var finishCount = 0
     private(set) var closeCount = 0
+    var startGate: StartGate?
 
     init(finishResult: Result<TranscriptionResult, FakeError> = .success(TranscriptionResult(text: "live text", language: "en"))) {
         self.finishResult = finishResult
@@ -79,6 +80,7 @@ final class FakeLiveSession: LiveTranscribing, @unchecked Sendable {
 
     func start() async {
         lock.withLock { startCount += 1 }
+        await startGate?.wait()
     }
 
     func write(_ pcm: Data) async {
@@ -92,6 +94,33 @@ final class FakeLiveSession: LiveTranscribing, @unchecked Sendable {
 
     func close() async {
         lock.withLock { closeCount += 1 }
+    }
+}
+
+final class StartGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var open = false
+
+    func wait() async {
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            let resumeNow = lock.withLock { () -> Bool in
+                if open { return true }
+                continuation = cont
+                return false
+            }
+            if resumeNow { cont.resume() }
+        }
+    }
+
+    func openGate() {
+        let cont = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            open = true
+            let cont = continuation
+            continuation = nil
+            return cont
+        }
+        cont?.resume()
     }
 }
 
@@ -188,6 +217,23 @@ final class FakePaster: TextPasting, @unchecked Sendable {
     }
 }
 
+final class ListeningMark: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stamped: Date?
+
+    func stamp() {
+        lock.lock()
+        if stamped == nil { stamped = Date() }
+        lock.unlock()
+    }
+
+    var date: Date? {
+        lock.lock()
+        defer { lock.unlock() }
+        return stamped
+    }
+}
+
 final class EventLog: @unchecked Sendable {
     private let lock = NSLock()
     private var _states: [PipelineState] = []
@@ -195,18 +241,21 @@ final class EventLog: @unchecked Sendable {
     private var _notices: [String] = []
     private var _errors: [String] = []
     private var _completed: [String] = []
+    private var _listeningEnded = 0
 
     var states: [PipelineState] { lock.withLock { _states } }
     var firstFrames: Int { lock.withLock { _firstFrames } }
     var notices: [String] { lock.withLock { _notices } }
     var errors: [String] { lock.withLock { _errors } }
     var completed: [String] { lock.withLock { _completed } }
+    var listeningEnded: Int { lock.withLock { _listeningEnded } }
 
     func recordState(_ state: PipelineState) { lock.withLock { _states.append(state) } }
     func recordFirstFrame() { lock.withLock { _firstFrames += 1 } }
     func recordNotice(_ text: String) { lock.withLock { _notices.append(text) } }
     func recordError(_ text: String) { lock.withLock { _errors.append(text) } }
     func recordCompleted(_ text: String) { lock.withLock { _completed.append(text) } }
+    func recordListeningEnded() { lock.withLock { _listeningEnded += 1 } }
 }
 
 // MARK: - Fixture
@@ -228,7 +277,9 @@ private func makeFixture(
     unaryResult: Result<TranscriptionResult, FakeError> = .success(TranscriptionResult(text: "unary text", language: "en")),
     wav: Data = WAVCodec.encodeMonoPCM16(Data(count: 3_200), sampleRate: 16_000),
     pasteOutcome: PasteOutcome = .pasted,
-    contextTermsProvider: @escaping @Sendable () -> [String] = { [] }
+    contextTermsProvider: @escaping @Sendable () -> [String] = { [] },
+    releaseLinger: TimeInterval = 0,
+    onListeningEnded: @escaping @Sendable () -> Void = {}
 ) -> Fixture {
     let recorder = FakeRecorder()
     recorder.wav = wav
@@ -250,6 +301,10 @@ private func makeFixture(
         metrics: metrics,
         events: PipelineEvents(
             onStateChange: { events.recordState($0) },
+            onListeningEnded: {
+                events.recordListeningEnded()
+                onListeningEnded()
+            },
             onFirstFrame: { events.recordFirstFrame() },
             onNotice: { events.recordNotice($0) },
             onDictationError: { events.recordError($0) },
@@ -258,7 +313,8 @@ private func makeFixture(
         pasteTargetProvider: { PasteTarget(pid: 4242) },
         contextTermsProvider: contextTermsProvider,
         pasteDelay: 0.05,
-        failedRecordingURL: failedURL
+        failedRecordingURL: failedURL,
+        releaseLinger: releaseLinger
     )
     return Fixture(
         pipeline: pipeline,
@@ -329,6 +385,58 @@ func pipelineSuite() -> Suite {
         try expect(fixture.paster.calls.isEmpty)
     }
 
+    suite.test("a release before the press starts does not record") {
+        let fixture = makeFixture()
+        try expect(await fixture.pipeline.stopAndProcess(source: "up", pressID: 3) == false)
+        try expect(await fixture.pipeline.start(source: "down", pressID: 3) == false)
+        try expect(await fixture.pipeline.state == .idle)
+        try expect(fixture.recorder.startCount == 0)
+        try expect(fixture.events.listeningEnded == 0)
+        try expect(await fixture.pipeline.start(source: "next", pressID: 4) == true)
+        try expect(fixture.recorder.startCount == 1)
+        await fixture.pipeline.cancel(source: "cleanup")
+    }
+
+    suite.test("a release during setup ends listening before the microphone opens") {
+        let fixture = makeFixture()
+        let gate = StartGate()
+        fixture.live.startGate = gate
+        async let started = fixture.pipeline.start(source: "down", pressID: 7)
+        let deadline = Date().addingTimeInterval(1)
+        while fixture.live.startCount == 0, Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        try expect(fixture.live.startCount == 1)
+        try expect(await fixture.pipeline.stopAndProcess(source: "up", pressID: 7) == false)
+        try expect(fixture.recorder.startCount == 0)
+        try expect(fixture.events.listeningEnded == 1)
+        gate.openGate()
+        try expect(await started == true)
+        try expect(fixture.recorder.startCount == 1)
+        try expect(fixture.recorder.stopCount == 1)
+        try expect(await fixture.pipeline.state == .idle)
+    }
+
+    suite.test("a zero linger override skips the configured release tail") {
+        let fixture = makeFixture(releaseLinger: 2)
+        let started = Date()
+        try expect(await fixture.pipeline.start(source: "test") == true)
+        try expect(await fixture.pipeline.stopAndProcess(source: "test", linger: 0) == true)
+        try expect(Date().timeIntervalSince(started) < 1)
+    }
+
+    suite.test("listening ends before the release tail") {
+        let ended = ListeningMark()
+        let fixture = makeFixture(releaseLinger: 0.2, onListeningEnded: { ended.stamp() })
+        try expect(await fixture.pipeline.start(source: "down") == true)
+        let began = Date()
+        try expect(await fixture.pipeline.stopAndProcess(source: "up") == true)
+        let mark = try require(ended.date)
+        try expect(mark.timeIntervalSince(began) < 0.1)
+        try expect(Date().timeIntervalSince(began) >= 0.15)
+        try expect(fixture.events.listeningEnded == 1)
+    }
+
     suite.test("empty audio skips paste quietly") {
         let fixture = makeFixture(wav: Data())
         try expect(await fixture.pipeline.start(source: "test") == true)
@@ -373,6 +481,24 @@ func pipelineSuite() -> Suite {
         let measurement = try require(fixture.metrics.measurements.last)
         try expect(measurement.success)
         try expect(!measurement.usedLive)
+    }
+
+    suite.test("a model reply is not pasted and does not fall back") {
+        let fixture = makeFixture(
+            liveResult: .success(TranscriptionResult(text: "", modelReplyOnly: true)),
+            unaryResult: .success(TranscriptionResult(text: "I'm good."))
+        )
+        try expect(await fixture.pipeline.start(source: "test") == true)
+        try expect(await fixture.pipeline.stopAndProcess(source: "test") == true)
+
+        try expect(fixture.paster.calls.isEmpty)
+        try expect(fixture.transcriber.wavs.isEmpty, "the batch call would answer the same audio")
+        try expect(fixture.events.errors == ["model_reply"])
+        try expect(fixture.events.completed.isEmpty)
+
+        let measurement = try require(fixture.metrics.measurements.last)
+        try expect(!measurement.success)
+        try expect(measurement.error == "model_reply")
     }
 
     suite.test("live empty falls back to unary") {
@@ -474,7 +600,7 @@ func pipelineSuite() -> Suite {
         try expect(await fixture.pipeline.start(source: "test") == false)
         try expect(await fixture.pipeline.state == .idle)
         try expect(fixture.live.closeCount == 1, "a live session opened before the failure gets closed")
-        try expect(fixture.events.states.isEmpty)
+        try expect(fixture.events.states == [.recording, .idle])
     }
 
     suite.test("turn context is sent once and not reused") {
