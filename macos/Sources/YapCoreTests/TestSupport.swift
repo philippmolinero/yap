@@ -93,5 +93,6 @@ func allSuites() -> [Suite] {
         geminiLiveSuite(),
         turnContextSuite(),
         pipelineSuite(),
+        phoneLinkSuite(),
     ]
 }

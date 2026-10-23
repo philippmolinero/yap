@@ -94,6 +94,13 @@ struct YapMenu: View {
 
         Divider()
 
+        Button("iPhone code: \(model.phonePIN)") { model.copyPhoneCode() }
+        Button("New iPhone Code") { model.newPhoneCode() }
+        Button(model.phoneName.map { "iPhone: \($0)" } ?? "iPhone: not connected") {}
+            .disabled(true)
+
+        Divider()
+
         SettingsLink {
             Text("Settings…")
         }

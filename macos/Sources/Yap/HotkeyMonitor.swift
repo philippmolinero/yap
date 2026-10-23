@@ -29,6 +29,33 @@ final class HotkeyMonitor {
     private var watchdog: Timer?
     private(set) var forcedReleaseCount = 0
 
+    /// Device-dependent bits. Left and right share `.maskAlternate` and
+    /// `.maskControl`, so a release has to look at the key's own bit.
+    static let deviceMaskByKeycode: [Int: UInt64] = [
+        54: 0x10,    // Right Command
+        55: 0x08,    // Left Command
+        56: 0x02,    // Left Shift
+        58: 0x20,    // Left Option
+        59: 0x01,    // Left Control
+        60: 0x04,    // Right Shift
+        61: 0x40,    // Right Option
+        62: 0x2000,  // Right Control
+    ]
+
+    static func modifierIsDown(keycode: Int, flags: CGEventFlags) -> Bool {
+        let raw = flags.rawValue
+        if let mask = deviceMaskByKeycode[keycode] {
+            let anyDeviceBit = deviceMaskByKeycode.values.contains { (raw & $0) != 0 }
+            if anyDeviceBit {
+                return (raw & mask) != 0
+            }
+        }
+        if let flag = modifierFlagsByCode[keycode] {
+            return flags.contains(flag)
+        }
+        return false
+    }
+
     /// Virtual keycodes that are modifier keys report through flagsChanged.
     static let modifierFlagsByCode: [Int: CGEventFlags] = [
         54: .maskCommand,    // Right Command
@@ -131,13 +158,11 @@ final class HotkeyMonitor {
             }
 
         case .flagsChanged:
-            guard keycodes.contains(keycode), let flag = Self.modifierFlagsByCode[keycode] else { return }
-            let down = flags.contains(flag)
-            if down, !isHeld {
-                beginHeld(keycode: keycode)
-            } else if !down, isHeld, heldKeycode == keycode {
+            if isHeld, let held = heldKeycode, !Self.modifierIsDown(keycode: held, flags: flags) {
                 releaseHeld()
             }
+            guard keycodes.contains(keycode), Self.modifierIsDown(keycode: keycode, flags: flags), !isHeld else { return }
+            beginHeld(keycode: keycode)
 
         case .keyDown:
             guard keycodes.contains(keycode), Self.modifierFlagsByCode[keycode] == nil else { return }
@@ -243,13 +268,12 @@ final class HotkeyMonitor {
     }
 
     private func isKeyPhysicallyDown() -> Bool {
-        let keycode = heldKeycode ?? keycodes.first ?? 62
-        var down = CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(keycode))
-        if let flag = Self.modifierFlagsByCode[keycode] {
-            let flags = CGEventSource.flagsState(.combinedSessionState)
-            down = down || flags.contains(flag)
+        guard let keycode = heldKeycode else { return false }
+        let flags = CGEventSource.flagsState(.combinedSessionState)
+        if Self.deviceMaskByKeycode[keycode] != nil || Self.modifierFlagsByCode[keycode] != nil {
+            return Self.modifierIsDown(keycode: keycode, flags: flags)
         }
-        return down
+        return CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(keycode))
     }
 
     // MARK: - Permission

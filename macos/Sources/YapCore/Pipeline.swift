@@ -27,6 +27,8 @@ public enum PasteOutcome: Sendable, Equatable {
 /// hand back a WAV on stop.
 public protocol AudioRecording: AnyObject, Sendable {
     var isRecording: Bool { get }
+    /// Open the input device ahead of the next press so capture does not wait on it.
+    func warm()
     func start(
         onFrame: @escaping @Sendable (Data) -> Void,
         onFirstFrame: @escaping @Sendable () -> Void,
@@ -38,6 +40,10 @@ public protocol AudioRecording: AnyObject, Sendable {
     func forceStop()
 }
 
+public extension AudioRecording {
+    func warm() {}
+}
+
 public protocol TextPasting: Sendable {
     func paste(_ text: String, target: PasteTarget?, delay: TimeInterval) -> PasteOutcome
 }
@@ -46,6 +52,9 @@ public protocol TextPasting: Sendable {
 /// them may be invoked from the pipeline's executor.
 public struct PipelineEvents: Sendable {
     public var onStateChange: @Sendable (PipelineState) -> Void
+    /// Fired when the trigger is released, before any audio tail is kept.
+    /// The listening capsule and chime follow this, not the tail.
+    public var onListeningEnded: @Sendable () -> Void
     /// Fired once per recording when the first audio frame arrives.
     public var onFirstFrame: @Sendable () -> Void
     /// Quiet, non-error status (e.g. paste target closed).
@@ -55,12 +64,14 @@ public struct PipelineEvents: Sendable {
 
     public init(
         onStateChange: @escaping @Sendable (PipelineState) -> Void = { _ in },
+        onListeningEnded: @escaping @Sendable () -> Void = {},
         onFirstFrame: @escaping @Sendable () -> Void = {},
         onNotice: @escaping @Sendable (String) -> Void = { _ in },
         onDictationError: @escaping @Sendable (String) -> Void = { _ in },
         onDictationComplete: @escaping @Sendable (String) -> Void = { _ in }
     ) {
         self.onStateChange = onStateChange
+        self.onListeningEnded = onListeningEnded
         self.onFirstFrame = onFirstFrame
         self.onNotice = onNotice
         self.onDictationError = onDictationError
@@ -93,6 +104,15 @@ public actor DictationPipeline {
     /// Screen tokens captured at key down. Cleared when the turn ends.
     private var contextTerms: [String] = []
     private var failedWAV: Data?
+    /// Bumped when a new press replaces an in-flight transcription.
+    private var turnToken = 0
+    private var finishingSession: (any LiveTranscribing)?
+    /// The press currently being opened, so a release can name it.
+    private var currentPress: Int?
+    /// Set when that press's key-up arrives before the microphone is open.
+    private var releasedPress: Int?
+    /// How long a normal release keeps the mic open so the last word can arrive.
+    private let releaseLinger: TimeInterval
 
     public init(
         recorder: any AudioRecording,
@@ -104,7 +124,8 @@ public actor DictationPipeline {
         pasteTargetProvider: @escaping @Sendable () -> PasteTarget? = { nil },
         contextTermsProvider: @escaping @Sendable () -> [String] = { [] },
         pasteDelay: TimeInterval = 0.05,
-        failedRecordingURL: URL? = AppConfig.failedRecordingURL
+        failedRecordingURL: URL? = AppConfig.failedRecordingURL,
+        releaseLinger: TimeInterval = 0.25
     ) {
         self.recorder = recorder
         self.transcriber = transcriber
@@ -116,21 +137,48 @@ public actor DictationPipeline {
         self.contextTermsProvider = contextTermsProvider
         self.pasteDelay = pasteDelay
         self.failedRecordingURL = failedRecordingURL
+        self.releaseLinger = releaseLinger
     }
 
     // MARK: - Lifecycle
 
+    /// Open the input device so the next press does not wait on it.
+    public func warmCapture() async {
+        recorder.warm()
+    }
+
     /// Begin capturing. Returns without waiting for any transcript.
+    /// `pressID` lets a key-up that arrived first cancel this press.
+    /// Listening is shown before the microphone or the network does any work.
     @discardableResult
-    public func start(source: String = "external") async -> Bool {
-        guard state == .idle else {
+    public func start(source: String = "external", pressID: Int? = nil) async -> Bool {
+        if state == .recording {
             YapLog.warning("start_recording ignored in state \(state.rawValue) [source=\(source)]")
+            return false
+        }
+        if let pressID, releasedPress == pressID {
+            YapLog.info("start skipped — trigger already released [source=\(source)]")
+            return false
+        }
+        let replacing = state == .processing
+        turnToken += 1
+        if replacing {
+            YapLog.info("start superseded in-flight transcription [source=\(source)]")
+            let previous = finishingSession
+            finishingSession = nil
+            await previous?.close()
+        }
+        if let pressID, releasedPress == pressID {
+            YapLog.info("start skipped — trigger already released [source=\(source)]")
             return false
         }
 
         recordingIDSequence += 1
         activeRecordingID = recordingIDSequence
         let recordingID = recordingIDSequence
+        currentPress = pressID
+        // The overlay and chime follow this. It has to land before device and network work.
+        setState(.recording, source: source, recordingID: recordingID)
         pasteTarget = pasteTargetProvider()
         let terms = contextTermsProvider()
         contextTerms = terms
@@ -143,6 +191,10 @@ public actor DictationPipeline {
             session = opened
             liveSession = opened
             await opened.start()
+        }
+        if state != .recording {
+            await abandonSetup(session: session, source: source, recordingID: recordingID)
+            return false
         }
 
         var frameSink: (@Sendable (Data) -> Void)?
@@ -178,20 +230,64 @@ public actor DictationPipeline {
             frameContinuation = nil
             frameTask = nil
             await session?.close()
-            activeRecordingID = nil
+            setState(.idle, source: "\(source):start_error", recordingID: recordingID)
             return false
         }
 
-        setState(.recording, source: source, recordingID: recordingID)
+        if let pressID, releasedPress == pressID {
+            YapLog.info("trigger released during capture setup [source=\(source)]")
+            return await stopAndProcess(source: "\(source):released")
+        }
         return true
     }
 
+    /// Drop a capture setup that lost the race with cancel or a newer press.
+    private func abandonSetup(
+        session: (any LiveTranscribing)?,
+        source: String,
+        recordingID: Int
+    ) async {
+        let owned = liveSession
+        liveSession = nil
+        frameContinuation?.finish()
+        frameContinuation = nil
+        let pendingFrames = frameTask
+        frameTask = nil
+        await pendingFrames?.value
+        if owned != nil {
+            await session?.close()
+        }
+        if state == .recording {
+            setState(.idle, source: "\(source):abandoned", recordingID: recordingID)
+        }
+    }
+
     /// Stop capturing, transcribe, and paste. `abort` tears the capture down
-    /// without draining (silence auto-stop path).
+    /// without draining (silence auto-stop path). `linger` overrides the
+    /// release tail; the iPhone path passes 0 because its stop message is
+    /// already ordered after the last audio byte.
     @discardableResult
-    public func stopAndProcess(source: String = "external", abort: Bool = false) async -> Bool {
+    public func stopAndProcess(
+        source: String = "external",
+        abort: Bool = false,
+        pressID: Int? = nil,
+        linger: TimeInterval? = nil
+    ) async -> Bool {
+        if let pressID {
+            releasedPress = pressID
+        }
         guard state == .recording else {
-            YapLog.warning("stop_recording_and_process ignored in state \(state.rawValue) [source=\(source)]")
+            if pressID != nil {
+                YapLog.info("stop deferred — recording has not started [source=\(source)]")
+            } else {
+                YapLog.warning("stop_recording_and_process ignored in state \(state.rawValue) [source=\(source)]")
+            }
+            return false
+        }
+        guard recorder.isRecording else {
+            // start() is still opening the device. It stops once the tap is in.
+            events.onListeningEnded()
+            YapLog.info("stop deferred — microphone is not open yet [source=\(source)]")
             return false
         }
 
@@ -199,9 +295,28 @@ public actor DictationPipeline {
         let target = pasteTarget
         let terms = contextTerms
         let session = liveSession
+        let token = turnToken
+        let startedAt = Self.now()
         liveSession = nil
         pasteTarget = nil
         contextTerms = []
+        // The capsule and chime belong to the key, not to the tail that follows.
+        events.onListeningEnded()
+        // The key-up arrives before the last buffer, especially on Bluetooth.
+        // Leave the tap open so those frames still reach the live socket.
+        let tail = linger ?? releaseLinger
+        if !abort, tail > 0 {
+            YapLog.info("release linger \(String(format: "%.2f", tail))s")
+            try? await Task.sleep(for: .seconds(tail))
+            guard state == .recording, isCurrent(token) else {
+                frameContinuation?.finish()
+                frameContinuation = nil
+                frameTask = nil
+                await session?.close()
+                YapLog.info("release linger abandoned [source=\(source)]")
+                return false
+            }
+        }
         frameContinuation?.finish()
         frameContinuation = nil
         let pendingFrames = frameTask
@@ -209,7 +324,6 @@ public actor DictationPipeline {
         // Drain every queued frame before finalizing the live turn.
         await pendingFrames?.value
 
-        let startedAt = Self.now()
         let stopStarted = Self.now()
         let wav: Data
         do {
@@ -259,7 +373,8 @@ public actor DictationPipeline {
             target: target,
             session: session,
             vocabulary: terms,
-            fromRetry: false
+            fromRetry: false,
+            token: token
         )
         return true
     }
@@ -275,6 +390,9 @@ public actor DictationPipeline {
 
         let recordingID = activeRecordingID
         let session = liveSession
+        if state == .recording {
+            events.onListeningEnded()
+        }
         liveSession = nil
         pasteTarget = nil
         contextTerms = []
@@ -325,7 +443,8 @@ public actor DictationPipeline {
             target: nil,
             session: nil,
             vocabulary: [],
-            fromRetry: true
+            fromRetry: true,
+            token: turnToken
         )
         return true
     }
@@ -341,15 +460,39 @@ public actor DictationPipeline {
         target: PasteTarget?,
         session: (any LiveTranscribing)?,
         vocabulary: [String],
-        fromRetry: Bool
+        fromRetry: Bool,
+        token: Int
     ) async {
         let transcriptionStarted = Self.now()
         var result: TranscriptionResult?
         var usedLive = false
 
         if let session {
+            finishingSession = session
             do {
                 let live = try await session.finish()
+                if !isCurrent(token) {
+                    YapLog.info("stale transcription dropped after live finish")
+                    return
+                }
+                if live.modelReplyOnly {
+                    // The socket answered instead of transcribing. The batch call
+                    // sees the same audio and will answer too, so do not paste it.
+                    YapLog.warning("Gemini live replied instead of transcribing")
+                    emit(
+                        recordingID: recordingID,
+                        source: source,
+                        wav: wav,
+                        recorderStopSeconds: recorderStopSeconds,
+                        transcriptionSeconds: Self.now() - transcriptionStarted,
+                        totalSeconds: Self.now() - startedAt,
+                        success: false,
+                        error: "model_reply"
+                    )
+                    setState(.idle, source: "\(source):model_reply", recordingID: recordingID)
+                    events.onDictationError("model_reply")
+                    return
+                }
                 let text = live.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 if text.isEmpty {
                     YapLog.info("Live transcript empty")
@@ -361,15 +504,31 @@ public actor DictationPipeline {
             } catch {
                 YapLog.warning("Live transcription failed: \(error)")
             }
+            if finishingSession != nil {
+                finishingSession = nil
+            }
+            if !isCurrent(token) {
+                YapLog.info("stale transcription dropped")
+                return
+            }
             if result == nil {
                 YapLog.info("Batch transcription fallback")
             }
+        }
+
+        if !isCurrent(token) {
+            YapLog.info("stale transcription dropped")
+            return
         }
 
         if result == nil {
             do {
                 result = try await transcriber.transcribe(wav: wav, vocabulary: vocabulary)
             } catch {
+                if !isCurrent(token) {
+                    YapLog.info("stale transcription dropped")
+                    return
+                }
                 YapLog.error(
                     "Transcription failed [provider=\(transcriber.providerName) model=\(transcriber.modelName) source=\(source)]: \(error)"
                 )
@@ -388,6 +547,15 @@ public actor DictationPipeline {
                 events.onDictationError("transcription_failed")
                 return
             }
+            if !isCurrent(token) {
+                YapLog.info("stale transcription dropped")
+                return
+            }
+        }
+
+        if !isCurrent(token) {
+            YapLog.info("stale transcription dropped")
+            return
         }
 
         if fromRetry {
@@ -395,6 +563,11 @@ public actor DictationPipeline {
             clearFailedRecording()
         }
         let transcriptionSeconds = Self.now() - transcriptionStarted
+
+        guard isCurrent(token) else {
+            YapLog.info("stale transcription dropped")
+            return
+        }
 
         guard let result, !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             YapLog.info(
@@ -447,6 +620,10 @@ public actor DictationPipeline {
     }
 
     // MARK: - Helpers
+
+    private func isCurrent(_ token: Int) -> Bool {
+        token == turnToken
+    }
 
     private func setState(_ newState: PipelineState, source: String, recordingID: Int? = nil) {
         let previous = state

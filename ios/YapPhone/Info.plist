@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDisplayName</key>
+    <string>Yap Phone</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_yap._tcp</string>
+    </array>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Yap Phone finds your Mac on the local network to send dictation audio.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Yap Phone uses the microphone to dictate on your Mac.</string>
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>audio</string>
+    </array>
+    <key>UILaunchScreen</key>
+    <dict/>
+</dict>
+</plist>

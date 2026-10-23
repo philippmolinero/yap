@@ -96,7 +96,9 @@ public enum GeminiMessage {
     public static func unaryRequest(wav: Data, config: GeminiConfiguration) -> Data {
         var transcriptionConfig: [String: Any] = [
             "language_codes": config.languageCodes,
-            "mode": ["type": config.mode.rawValue],
+            // Interactions documents smart mode as the string "smart".
+            // Verbatim stays an object because that is where its options live.
+            "mode": config.mode == .smart ? "smart" : ["type": "verbatim"],
         ]
         if !config.vocabulary.isEmpty {
             transcriptionConfig["custom_vocabulary"] = config.vocabulary
@@ -248,7 +250,8 @@ final class URLSessionLiveSocket: LiveSocket, @unchecked Sendable {
 /// - no audio byte leaves before the setup completes; early frames are buffered
 /// - websocket writes are strictly ordered: setup, activity start, audio, activity end
 /// - activity start opens the turn, activity end closes it on release
-/// - finalization waits for the finalized `inputTranscription`
+/// - the paste text is the speaker's `inputTranscription` (or the latest interim)
+/// - a model reply (`modelTurn`, `outputTranscription`) is never the transcript
 /// - a transport failure with partial finals keeps the partial text
 public actor GeminiLiveSession: LiveTranscribing {
     private let configuration: GeminiConfiguration
@@ -256,6 +259,7 @@ public actor GeminiLiveSession: LiveTranscribing {
     private let setupTimeoutSeconds: TimeInterval
     private let finalTimeoutSeconds: TimeInterval
     private let finalGraceSeconds: TimeInterval
+    private let modelReplyWaitSeconds: TimeInterval
 
     private var receiveTask: Task<Void, Never>?
     private var setupTimeoutTask: Task<Void, Never>?
@@ -270,7 +274,11 @@ public actor GeminiLiveSession: LiveTranscribing {
     private var endRequested = false
     private var endSent = false
     private var finals: [String] = []
+    private var interim = ""
     private var language = ""
+    private var sawModelReply = false
+    private var modelReplyArmed = false
+    private var loggedContentKeys: Set<String> = []
     private var finished = false
     private var result: TranscriptionResult?
     private var failure: TranscriptionError?
@@ -282,8 +290,9 @@ public actor GeminiLiveSession: LiveTranscribing {
         socketURL: URL = GeminiMessage.liveURL,
         socket: (any LiveSocket)? = nil,
         setupTimeout: TimeInterval = 10,
-        finalTimeout: TimeInterval = 20,
-        grace: TimeInterval = 0.75
+        finalTimeout: TimeInterval = 8,
+        grace: TimeInterval = 0.75,
+        modelReplyWait: TimeInterval = 3
     ) {
         self.configuration = configuration
         self.socket = socket ?? URLSessionLiveSocket(
@@ -294,6 +303,7 @@ public actor GeminiLiveSession: LiveTranscribing {
         self.setupTimeoutSeconds = setupTimeout
         self.finalTimeoutSeconds = finalTimeout
         self.finalGraceSeconds = grace
+        self.modelReplyWaitSeconds = modelReplyWait
     }
 
     public func start() {
@@ -416,39 +426,96 @@ public actor GeminiLiveSession: LiveTranscribing {
             }
             return finished
         }
+        noteContentKeys(content)
 
-        let transcription = (content["inputTranscription"] as? [String: Any])
-            ?? (content["input_transcription"] as? [String: Any])
-        if let transcription {
+        if let transcription = inputTranscription(in: content) {
             let text = (transcription["text"] as? String ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if !text.isEmpty {
                 finals.append(text)
                 YapLog.info("Gemini live transcript chars=\(text.count)")
-            }
-            for key in ["language", "languageCode", "language_code"] {
-                let value = (transcription[key] as? String ?? "").trimmingCharacters(in: .whitespaces)
-                if !value.isEmpty {
-                    language = value
-                    break
+                if endSent {
+                    scheduleGrace()
                 }
             }
-            if endSent {
-                scheduleGrace()
+            rememberLanguage(transcription)
+        }
+        if finals.isEmpty, let text = interimTranscription(in: content) {
+            // Keep the latest hypothesis, but do not finish on it. An early
+            // interim is a prefix; the final is what includes the last words.
+            interim = text
+        }
+
+        if isModelReply(content) {
+            if !sawModelReply {
+                YapLog.info("Gemini live model reply ignored")
+            }
+            sawModelReply = true
+            // No finalized speaker text yet. One bounded wait, which a later
+            // final cancels. Further reply chunks must not keep resetting it.
+            if endSent, finals.isEmpty {
+                scheduleModelReplyDeadline()
             }
         }
 
         if turnIsComplete(content) {
             YapLog.info("Gemini live turn complete")
-            if finals.isEmpty, endSent {
+            if speakerTranscript().isEmpty, endSent {
                 // Transcription can arrive after turnComplete. Give it the grace
-                // window instead of falling through to the unary call immediately.
+                // window instead of falling through immediately.
                 scheduleGrace()
-            } else {
+            } else if !speakerTranscript().isEmpty {
                 complete()
             }
         }
         return finished
+    }
+
+    private func noteContentKeys(_ content: [String: Any]) {
+        let keys = content.keys.sorted().joined(separator: ",")
+        guard loggedContentKeys.insert(keys).inserted, !keys.isEmpty else { return }
+        YapLog.info("Gemini live server keys=\(keys)")
+    }
+
+    private func inputTranscription(in content: [String: Any]) -> [String: Any]? {
+        (content["inputTranscription"] as? [String: Any])
+            ?? (content["input_transcription"] as? [String: Any])
+    }
+
+    /// Latest hypothesis of the speaker's words. Replaced, not appended.
+    private func interimTranscription(in content: [String: Any]) -> String? {
+        let transcription = (content["interimInputTranscription"] as? [String: Any])
+            ?? (content["interim_input_transcription"] as? [String: Any])
+        guard let transcription else { return nil }
+        let text = (transcription["text"] as? String ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+        rememberLanguage(transcription)
+        return text
+    }
+
+    private func rememberLanguage(_ transcription: [String: Any]) {
+        for key in ["language", "languageCode", "language_code"] {
+            let value = (transcription[key] as? String ?? "").trimmingCharacters(in: .whitespaces)
+            if !value.isEmpty {
+                language = value
+                break
+            }
+        }
+    }
+
+    /// Text the model generated on its own. That is not dictation.
+    private func isModelReply(_ content: [String: Any]) -> Bool {
+        if content["modelTurn"] != nil || content["model_turn"] != nil { return true }
+        if content["outputTranscription"] != nil || content["output_transcription"] != nil { return true }
+        return false
+    }
+
+    /// Final speaker text when the server sent any, otherwise the latest interim.
+    private func speakerTranscript() -> String {
+        let finalText = finals.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !finalText.isEmpty { return finalText }
+        return interim.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func serverContent(from message: [String: Any]) -> [String: Any]? {
@@ -492,16 +559,29 @@ public actor GeminiLiveSession: LiveTranscribing {
         enqueue(GeminiMessage.activityEnd())
         YapLog.info("Gemini live activity end queued")
         scheduleFinalTimeout()
+        // A finalized transcript can settle immediately. An interim hypothesis
+        // stays open so the final, which often arrives just after release, can
+        // replace it. A model reply must not hold that wait open.
+        if !finals.isEmpty {
+            scheduleGrace()
+        } else if sawModelReply {
+            scheduleModelReplyDeadline()
+        }
     }
 
     private func handleSocketFailure(_ error: Error) {
         // Teardown after a completed turn is not a failure.
         guard !finished else { return }
         let message = redacted(error.localizedDescription)
-        if finals.isEmpty {
+        if speakerTranscript().isEmpty, sawModelReply {
+            YapLog.warning("Gemini live socket failed after a model reply: \(message)")
+            complete()
+            return
+        }
+        if speakerTranscript().isEmpty {
             fail(.transport(message))
         } else {
-            YapLog.warning("Gemini live socket failed with partial finals: \(message)")
+            YapLog.warning("Gemini live socket failed with partial transcript: \(message)")
             complete()
         }
     }
@@ -540,11 +620,30 @@ public actor GeminiLiveSession: LiveTranscribing {
 
     private func finalTimeoutElapsed() {
         guard !finished else { return }
-        if finals.isEmpty {
+        if !speakerTranscript().isEmpty || sawModelReply {
+            if speakerTranscript().isEmpty {
+                YapLog.warning("Gemini live final timed out after a model reply")
+            }
+            complete()
+        } else {
             YapLog.warning("Gemini live final timed out")
             fail(.timedOut)
-        } else {
-            complete()
+        }
+    }
+
+    /// One bounded wait for a speaker transcript after the model starts replying.
+    /// Further reply chunks must not keep the spinner up.
+    private func scheduleModelReplyDeadline() {
+        guard !modelReplyArmed, !finished else { return }
+        modelReplyArmed = true
+        graceTask?.cancel()
+        graceTask = Task {
+            do {
+                try await Task.sleep(for: .seconds(self.modelReplyWaitSeconds))
+            } catch {
+                return
+            }
+            self.graceElapsed()
         }
     }
 
@@ -581,8 +680,16 @@ public actor GeminiLiveSession: LiveTranscribing {
         finished = true
         cancelTimers()
         buffered.removeAll()
-        let text = finals.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
-        let result = TranscriptionResult(text: text, language: language, latency: 0)
+        let text = speakerTranscript()
+        if finals.isEmpty, !text.isEmpty {
+            YapLog.info("Gemini live used interim transcript chars=\(text.count)")
+        }
+        let result = TranscriptionResult(
+            text: text,
+            language: language,
+            latency: 0,
+            modelReplyOnly: text.isEmpty && sawModelReply
+        )
         self.result = result
         closeSocket()
         if let continuation {
@@ -593,8 +700,8 @@ public actor GeminiLiveSession: LiveTranscribing {
 
     private func fail(_ error: TranscriptionError) {
         guard !finished else { return }
-        if !finals.isEmpty {
-            // A transport failure after partial finals keeps the partial text.
+        if !speakerTranscript().isEmpty {
+            // A transport failure after partial transcript keeps that text.
             complete()
             return
         }
