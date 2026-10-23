@@ -146,48 +146,18 @@ final class FakeTranscriber: Transcribing, @unchecked Sendable {
         set { lock.withLock { _result = newValue } }
     }
 
-    private var _liveVocabularies: [[String]] = []
-    private var _unaryVocabularies: [[String]] = []
-
     var wavs: [Data] { lock.withLock { _wavs } }
-    var liveVocabularies: [[String]] { lock.withLock { _liveVocabularies } }
-    var unaryVocabularies: [[String]] { lock.withLock { _unaryVocabularies } }
 
-    func makeLiveSession(vocabulary: [String]) -> (any LiveTranscribing)? {
-        lock.withLock {
-            _liveVocabularies.append(vocabulary)
-            return _liveSession
-        }
+    func makeLiveSession() -> (any LiveTranscribing)? {
+        lock.withLock { _liveSession }
     }
 
-    func transcribe(wav: Data, vocabulary: [String]) async throws -> TranscriptionResult {
+    func transcribe(wav: Data) async throws -> TranscriptionResult {
         let result: Result<TranscriptionResult, FakeError> = lock.withLock {
             _wavs.append(wav)
-            _unaryVocabularies.append(vocabulary)
             return _result
         }
         return try result.get()
-    }
-}
-
-/// Scripted focused-field terms. Each call returns the next list, then empty.
-final class ScriptedTerms: @unchecked Sendable {
-    private let lock = NSLock()
-    private var remaining: [[String]]
-    private var _calls = 0
-
-    init(_ remaining: [[String]]) {
-        self.remaining = remaining
-    }
-
-    var calls: Int { lock.withLock { _calls } }
-
-    func next() -> [String] {
-        lock.withLock {
-            _calls += 1
-            guard !remaining.isEmpty else { return [] }
-            return remaining.removeFirst()
-        }
     }
 }
 
@@ -277,7 +247,6 @@ private func makeFixture(
     unaryResult: Result<TranscriptionResult, FakeError> = .success(TranscriptionResult(text: "unary text", language: "en")),
     wav: Data = WAVCodec.encodeMonoPCM16(Data(count: 3_200), sampleRate: 16_000),
     pasteOutcome: PasteOutcome = .pasted,
-    contextTermsProvider: @escaping @Sendable () -> [String] = { [] },
     releaseLinger: TimeInterval = 0,
     onListeningEnded: @escaping @Sendable () -> Void = {}
 ) -> Fixture {
@@ -311,7 +280,6 @@ private func makeFixture(
             onDictationComplete: { events.recordCompleted($0) }
         ),
         pasteTargetProvider: { PasteTarget(pid: 4242) },
-        contextTermsProvider: contextTermsProvider,
         pasteDelay: 0.05,
         failedRecordingURL: failedURL,
         releaseLinger: releaseLinger
@@ -601,61 +569,6 @@ func pipelineSuite() -> Suite {
         try expect(await fixture.pipeline.state == .idle)
         try expect(fixture.live.closeCount == 1, "a live session opened before the failure gets closed")
         try expect(fixture.events.states == [.recording, .idle])
-    }
-
-    suite.test("turn context is sent once and not reused") {
-        let script = ScriptedTerms([["TaskFilters"], []])
-        let fixture = makeFixture(contextTermsProvider: { script.next() })
-
-        try expect(await fixture.pipeline.start(source: "test") == true)
-        try expect(await fixture.pipeline.stopAndProcess(source: "test") == true)
-        try expect(fixture.transcriber.liveVocabularies == [["TaskFilters"]])
-        try expect(fixture.transcriber.unaryVocabularies.isEmpty, "a live hit does not repeat the terms on the unary call")
-
-        try expect(await fixture.pipeline.start(source: "test") == true)
-        try expect(await fixture.pipeline.stopAndProcess(source: "test") == true)
-        try expect(fixture.transcriber.liveVocabularies == [["TaskFilters"], []])
-        try expect(script.calls == 2)
-    }
-
-    suite.test("ignored start does not read context again") {
-        let script = ScriptedTerms([["TaskFilters"]])
-        let fixture = makeFixture(contextTermsProvider: { script.next() })
-        try expect(await fixture.pipeline.start(source: "first") == true)
-        try expect(await fixture.pipeline.start(source: "second") == false)
-        try expect(script.calls == 1)
-        await fixture.pipeline.cancel(source: "cleanup")
-    }
-
-    suite.test("empty live transcript still forwards context to the unary call") {
-        let fixture = makeFixture(
-            liveResult: .success(TranscriptionResult(text: "  ")),
-            contextTermsProvider: { ["TaskFilters"] }
-        )
-        try expect(await fixture.pipeline.start(source: "test") == true)
-        try expect(await fixture.pipeline.stopAndProcess(source: "test") == true)
-        try expect(fixture.transcriber.liveVocabularies == [["TaskFilters"]])
-        try expect(fixture.transcriber.unaryVocabularies == [["TaskFilters"]])
-        try expect(fixture.paster.calls.map(\.text) == ["unary text"])
-    }
-
-    suite.test("retry does not reuse the failed turn's context") {
-        let script = ScriptedTerms([["TaskFilters"]])
-        let fixture = makeFixture(
-            liveResult: .failure(FakeError(message: "no socket")),
-            unaryResult: .failure(FakeError(message: "no network")),
-            contextTermsProvider: { script.next() }
-        )
-        try expect(await fixture.pipeline.start(source: "test") == true)
-        try expect(await fixture.pipeline.stopAndProcess(source: "test") == true)
-        try expect(fixture.transcriber.unaryVocabularies == [["TaskFilters"]])
-
-        fixture.transcriber.result = .success(TranscriptionResult(text: "recovered", language: "en"))
-        try expect(await fixture.pipeline.retryLastFailure(source: "menu_retry") == true)
-        try expect(fixture.transcriber.unaryVocabularies == [["TaskFilters"], []])
-        try expect(fixture.transcriber.liveVocabularies == [["TaskFilters"]], "retry does not open a new live session")
-        try expect(script.calls == 1, "retry does not read the screen again")
-        try expect(fixture.paster.calls.map(\.text) == ["recovered"])
     }
 
     return suite

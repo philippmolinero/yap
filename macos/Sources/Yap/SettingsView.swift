@@ -48,13 +48,6 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("Context") {
-                Toggle("Names from the focused field", isOn: contextBinding)
-                Text("Names, code, and file names in the focused field and the window title go with this dictation only. They are not saved.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
             Section("Silence auto-stop") {
                 Toggle("Stop recording after silence", isOn: $silenceEnabled)
                     .onChange(of: silenceEnabled) { _, enabled in
@@ -122,13 +115,6 @@ struct SettingsView: View {
         Binding(
             get: { model.config.hotkey.keycodes },
             set: { model.updateTrigger($0) }
-        )
-    }
-
-    private var contextBinding: Binding<Bool> {
-        Binding(
-            get: { model.config.context.enabled },
-            set: { model.updateContext($0) }
         )
     }
 

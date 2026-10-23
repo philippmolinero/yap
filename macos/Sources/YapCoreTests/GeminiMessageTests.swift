@@ -8,7 +8,7 @@ private func decode(_ data: Data) throws -> [String: Any] {
 func geminiMessageSuite() -> Suite {
     let suite = Suite("Gemini message shaping")
 
-    suite.test("setup message streams text with vocabulary") {
+    suite.test("setup message omits the vocabulary list") {
         let config = GeminiConfiguration(
             apiKey: "secret",
             model: "gemini-3.5-transcribe",
@@ -28,7 +28,8 @@ func geminiMessageSuite() -> Suite {
         let transcription = try require(setup["inputAudioTranscription"] as? [String: Any])
         try expect(transcription["mode"] as? String == "SMART")
         try expect(transcription["languageCodes"] as? [String] == ["en", "de-DE"])
-        try expect(transcription["customVocabulary"] as? [String] == ["Claude Code", "Yap"])
+        try expect(transcription["customVocabulary"] == nil)
+        try expect(String(data: GeminiMessage.setup(config), encoding: .utf8)?.contains("Claude Code") == false)
 
         let realtime = try require(setup["realtimeInputConfig"] as? [String: Any])
         let detection = try require(realtime["automaticActivityDetection"] as? [String: Any])
@@ -50,8 +51,8 @@ func geminiMessageSuite() -> Suite {
         let setup = try require(message["setup"] as? [String: Any])
         let transcription = try require(setup["inputAudioTranscription"] as? [String: Any])
         try expect(transcription["mode"] as? String == "VERBATIM")
-        let vocabulary = try require(transcription["customVocabulary"] as? [String])
-        try expect(vocabulary.count == 100)
+        try expect(transcription["customVocabulary"] == nil)
+        try expect(String(data: GeminiMessage.setup(config), encoding: .utf8)?.contains("term0") == false)
     }
 
     suite.test("audio and activity messages") {
@@ -88,7 +89,8 @@ func geminiMessageSuite() -> Suite {
         let transcription = try require(generation["transcription_config"] as? [String: Any])
         try expect(transcription["language_codes"] as? [String] == ["de-DE"])
         try expect(transcription["mode"] as? String == "smart")
-        try expect(transcription["custom_vocabulary"] as? [String] == ["Yap"])
+        try expect(transcription["custom_vocabulary"] == nil)
+        try expect(String(data: GeminiMessage.unaryRequest(wav: Data([0, 1]), config: config), encoding: .utf8)?.contains("Yap") == false)
     }
 
     suite.test("transcript reads all response shapes") {

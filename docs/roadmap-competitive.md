@@ -33,7 +33,7 @@ Permissions are Input Monitoring (the trigger), Microphone, and Accessibility (p
 5. **Paste.** There is no second model call. Smart mode asks Gemini's transcription API for cleaned text. Verbatim asks for the words as spoken, fillers included. The paster snapshots the clipboard, writes the transcript, activates the original app if it is still running, waits the configured 50 ms, posts `Cmd+V`, and restores the clipboard about 350 ms later. If the target has quit, or Accessibility is missing, the text stays on the clipboard and the menu says so.
 6. **After.** The line is prepended to history. Metrics record durations, provider, model, language, character count, success, and whether the live socket was used. They do not record the words. A failed transcription stashes the WAV for "Retry Failed Dictation". Sleep cancels the recording and drops the hotkey tap until wake.
 
-Default model id is `gemini-3.5-transcribe`. The live socket uses that id plus `-live`. Language defaults to the allowed list `en` and `de` (sent as `en` and `de-DE`). Settings can pin English, German, or Thai, or leave detection on. Vocabulary is a newline list, capped at 100 terms, sent as Gemini `customVocabulary` / `custom_vocabulary`. The bundled seed list is mostly project names (`Claude Code`, `Voxtral`, `Cerebras`, and similar). Editing it means "Open Vocabulary", which opens the text file.
+Default model id is `gemini-3.5-transcribe`. The live socket uses that id plus `-live`. Language defaults to the allowed list `en` and `de` (sent as `en` and `de-DE`). Settings can pin English, German, or Thai, or leave detection on. Vocabulary is a newline list in `vocabulary.txt`, capped at 100 terms when loaded into the Gemini configuration. It is not sent on the live setup or the unary request: Gemini treats the list as a phrase prior and can write a listed word that was not spoken. The bundled seed list is mostly project names (`Claude Code`, `Voxtral`, `Cerebras`, and similar). Editing it means "Open Vocabulary", which opens the text file.
 
 ### Latency path
 
@@ -166,7 +166,7 @@ Trials: 14 days by default, 30 with a referral, 90 for students ([plans article]
 | Live words before paste | Partials are received and hidden. Overlay says Listening / Transcribing. | Realtime shows words in the toolbar, then cleans them. Instant does not. Realtime is Max. | Not described as a live caption. The bar shows processing states such as "Cleaning up…". |
 | Cleanup | One switch: Smart or Verbatim, inside the Gemini transcription request. No second model. | Avalon plus an unnamed LM post-process. Custom instructions on Pro. | Separate ASR and LLM. Auto Cleanup has four strengths. Raw text kept. |
 | Self-corrections ("actually, Monday") | Not a documented behavior. Smart mode may do some of this. Unmeasured. | Marketed via realtime mid-sentence fixes ("change Thursday to Friday") before send. | Homepage and help center. A primary demo. |
-| Names and code on screen | Static `vocabulary.txt`, 100 terms, every turn. No screen read. | Deep Context: one screenshot at start, words extracted, image dropped. Off by default. Every desktop plan. | Context awareness reads text (not screenshots): field, selection, on-screen words, code symbols. On by default. Dropped if slow. |
+| Names and code on screen | `vocabulary.txt` is a local list and is not sent. No screen read. | Deep Context: one screenshot at start, words extracted, image dropped. Off by default. Every desktop plan. | Context awareness reads text (not screenshots): field, selection, on-screen words, code symbols. On by default. Dropped if slow. |
 | Personal dictionary | Text file, opened in an editor. Seeded with a few project names. | In-app dictionary, casing preserved, synced, CLI. Size of "expanded" is not published. | In-app dictionary, can learn terms, shared on teams. Injected into Canto at runtime. |
 | Snippets | None. | Replacements: spoken phrase to saved text. | Snippets, including mid-sentence and rich text on desktop. |
 | Tone per app | None. The bundle id is stored only to paste back. | Formats for the destination app. Custom instructions. File tags in Cursor and Windsurf. | Four app categories, four styles. English-only style rules. Email structure. Local casing match even if context upload is off. |
@@ -185,7 +185,7 @@ Ranked for one person dictating into Slack, mail, notes, and coding agents on a 
 
 | Rank | Gap | Impact | Effort | Why it is this high |
 | --- | --- | --- | --- | --- |
-| 1 | The words on screen never reach the model. Names, file names, and function names depend on a hand-edited list of 100. | Highest. This is the mistake you notice in Claude Code, Cursor, and email. | Medium | Both products built a feature for it. Aqua's examples are exactly this failure. Yap already has a per-turn vocabulary channel and already holds the target pid. |
+| 1 | The words on screen never reach the model. The hand-edited list in `vocabulary.txt` does not either: sending it makes Gemini insert terms that were not spoken. | Highest. This is the mistake you notice in Claude Code, Cursor, and email. | Medium | Both products built a feature for it. Aqua's examples are exactly this failure. Yap holds the paste-target pid. There is no per-turn vocabulary channel. |
 | 2 | Cleanup is a single global switch, with no per-app tone and no measured self-correction behavior. | Highest. Every paste. A Slack line and a German email should not come out the same shape. | Medium | Wispr's category styles and Aqua's instructions are the writing product. Yap's Smart mode is an opaque API enum. |
 | 3 | No replacements. Repeated signatures, links, and prompt preambles are re-dictated. | High, daily, and it does not need a model. | Low | Both products split this from the dictionary on purpose. A spoken phrase is not a spelling. |
 | 4 | You cannot see words until the paste. Long turns feel like a wait, and a bad paste is the first feedback. | High for trust. | Medium | The live socket already returns partial transcripts. The overlay throws them away. Aqua's realtime page is this feeling, minus their Max-only send command. |
@@ -209,11 +209,9 @@ Done when a local run of ten dictations produces a p50 and a p95 for the live pa
 
 ### 2. Turn-local context from the focused field and window
 
-On key down, if a new Settings switch is on, read the focused element's text and the window title through Accessibility, which Yap already requires to paste. Extract a bounded set of tokens that look like names, CamelCase, snake_case, and file names. Merge them in front of `vocabulary.txt` for that turn only, still capped at 100. Do not write them to disk. Do not take a screenshot. Default the switch to off.
+Tried in the focused-field work and removed. Merging screen tokens in front of `vocabulary.txt` and sending that list makes Gemini write words the speaker did not say, so neither the saved list nor a per-turn list is put on the Gemini payload. Do not reintroduce `customVocabulary` / `custom_vocabulary` until the model stops inserting unspoken terms. A screenshot is still out of scope for the same reason plus Screen Recording.
 
-This is Wispr's text context, not Aqua's screenshot. A screenshot sees pixels the accessibility tree misses, and it needs Screen Recording. The local REA pass should decide whether the tree is enough before anyone adds a screenshot.
-
-Done when a dictation of "task filters" with `TaskFilters` in the focused editor comes back as `TaskFilters` with the switch on, and the same audio without the switch does not gain that spelling from a previous turn. Tests use a fake context source, not a live UI.
+The shape, if it ever becomes safe to send, was: on key down, if a Settings switch is on, read the focused element's text and the window title through Accessibility. Extract a bounded set of tokens that look like names, CamelCase, snake_case, and file names. Merge them in front of `vocabulary.txt` for that turn only, still capped at 100. Do not write them to disk. Default the switch to off.
 
 ### 3. App-category formatting in front of the paste
 
@@ -244,7 +242,7 @@ Done when a test double that emits two partials and a final results in one paste
 
 Replace "Open Vocabulary" as the primary UI with an add/remove list bound to `vocabulary.txt`. Keep the file as the storage format. In the Recent menu, add "Remember spelling…" on the last item: the person marks a span, and that span is appended to the list if it is not already there and the list is under 100.
 
-Done when a term added in Settings is on the next Gemini payload, and a duplicate is not stored twice.
+Done when a term added in Settings is stored once, and a duplicate is not stored twice. The list stays off the Gemini payload.
 
 ### 7. Selection edit on the same key
 
