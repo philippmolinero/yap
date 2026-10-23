@@ -89,8 +89,6 @@ public actor DictationPipeline {
     private let metrics: any MetricsWriting
     private let events: PipelineEvents
     private let pasteTargetProvider: @Sendable () -> PasteTarget?
-    /// Turn-local vocabulary. Empty when the Settings switch is off.
-    private let contextTermsProvider: @Sendable () -> [String]
     private let pasteDelay: TimeInterval
     private let failedRecordingURL: URL?
 
@@ -101,8 +99,6 @@ public actor DictationPipeline {
     private var frameContinuation: AsyncStream<Data>.Continuation?
     private var frameTask: Task<Void, Never>?
     private var pasteTarget: PasteTarget?
-    /// Screen tokens captured at key down. Cleared when the turn ends.
-    private var contextTerms: [String] = []
     private var failedWAV: Data?
     /// Bumped when a new press replaces an in-flight transcription.
     private var turnToken = 0
@@ -122,7 +118,6 @@ public actor DictationPipeline {
         metrics: any MetricsWriting = FileMetricsWriter(),
         events: PipelineEvents = PipelineEvents(),
         pasteTargetProvider: @escaping @Sendable () -> PasteTarget? = { nil },
-        contextTermsProvider: @escaping @Sendable () -> [String] = { [] },
         pasteDelay: TimeInterval = 0.05,
         failedRecordingURL: URL? = AppConfig.failedRecordingURL,
         releaseLinger: TimeInterval = 0.25
@@ -134,7 +129,6 @@ public actor DictationPipeline {
         self.metrics = metrics
         self.events = events
         self.pasteTargetProvider = pasteTargetProvider
-        self.contextTermsProvider = contextTermsProvider
         self.pasteDelay = pasteDelay
         self.failedRecordingURL = failedRecordingURL
         self.releaseLinger = releaseLinger
@@ -180,14 +174,9 @@ public actor DictationPipeline {
         // The overlay and chime follow this. It has to land before device and network work.
         setState(.recording, source: source, recordingID: recordingID)
         pasteTarget = pasteTargetProvider()
-        let terms = contextTermsProvider()
-        contextTerms = terms
-        if !terms.isEmpty {
-            YapLog.info("turn context terms=\(terms.count)")
-        }
 
         var session: (any LiveTranscribing)?
-        if let opened = transcriber.makeLiveSession(vocabulary: terms) {
+        if let opened = transcriber.makeLiveSession() {
             session = opened
             liveSession = opened
             await opened.start()
@@ -224,7 +213,6 @@ public actor DictationPipeline {
         } catch {
             YapLog.error("Recorder start failed [source=\(source) recording=\(recordingID)]: \(error.localizedDescription)")
             liveSession = nil
-            contextTerms = []
             pasteTarget = nil
             frameContinuation?.finish()
             frameContinuation = nil
@@ -293,13 +281,11 @@ public actor DictationPipeline {
 
         let recordingID = activeRecordingID
         let target = pasteTarget
-        let terms = contextTerms
         let session = liveSession
         let token = turnToken
         let startedAt = Self.now()
         liveSession = nil
         pasteTarget = nil
-        contextTerms = []
         // The capsule and chime belong to the key, not to the tail that follows.
         events.onListeningEnded()
         // The key-up arrives before the last buffer, especially on Bluetooth.
@@ -372,7 +358,6 @@ public actor DictationPipeline {
             startedAt: startedAt,
             target: target,
             session: session,
-            vocabulary: terms,
             fromRetry: false,
             token: token
         )
@@ -395,7 +380,6 @@ public actor DictationPipeline {
         }
         liveSession = nil
         pasteTarget = nil
-        contextTerms = []
         frameContinuation?.finish()
         frameContinuation = nil
         let pendingFrames = frameTask
@@ -442,7 +426,6 @@ public actor DictationPipeline {
             startedAt: Self.now(),
             target: nil,
             session: nil,
-            vocabulary: [],
             fromRetry: true,
             token: turnToken
         )
@@ -459,7 +442,6 @@ public actor DictationPipeline {
         startedAt: TimeInterval,
         target: PasteTarget?,
         session: (any LiveTranscribing)?,
-        vocabulary: [String],
         fromRetry: Bool,
         token: Int
     ) async {
@@ -523,7 +505,7 @@ public actor DictationPipeline {
 
         if result == nil {
             do {
-                result = try await transcriber.transcribe(wav: wav, vocabulary: vocabulary)
+                result = try await transcriber.transcribe(wav: wav)
             } catch {
                 if !isCurrent(token) {
                     YapLog.info("stale transcription dropped")

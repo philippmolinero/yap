@@ -22,7 +22,7 @@ enum Permissions {
             switch self {
             case .microphone: return "Dictation records what you say."
             case .inputMonitoring: return "The trigger key is heard system-wide."
-            case .accessibility: return "Cmd+V pastes into the focused app. With context on, that field is read for this turn."
+            case .accessibility: return "Cmd+V pastes your text into the focused app."
             }
         }
 

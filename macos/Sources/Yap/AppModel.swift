@@ -251,7 +251,6 @@ final class AppModel {
                 Task { @MainActor in self?.handleDictationComplete() }
             }
         )
-        let contextEnabled = config.context.enabled
         return DictationPipeline(
             recorder: router,
             transcriber: makeTranscriber(),
@@ -260,10 +259,6 @@ final class AppModel {
             metrics: FileMetricsWriter(),
             events: events,
             pasteTargetProvider: { SystemEvents.frontmostPasteTarget() },
-            contextTermsProvider: {
-                guard contextEnabled else { return [] }
-                return FocusedContextReader.terms()
-            },
             pasteDelay: config.pasteDelay,
             failedRecordingURL: AppConfig.failedRecordingURL
         )
@@ -423,11 +418,6 @@ final class AppModel {
 
     func updateSilenceTimeout(_ timeout: Double) {
         config.silence.timeout = timeout
-        persistAndRebuild()
-    }
-
-    func updateContext(_ enabled: Bool) {
-        config.context.enabled = enabled
         persistAndRebuild()
     }
 

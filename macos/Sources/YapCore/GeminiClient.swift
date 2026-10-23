@@ -32,17 +32,6 @@ public struct GeminiConfiguration: Sendable, Equatable {
                 .prefix(Self.vocabularyLimit)
         )
     }
-
-    /// A copy whose vocabulary is the turn's context tokens followed by the
-    /// saved list, still capped at `vocabularyLimit`. An empty extra list
-    /// returns this configuration unchanged.
-    public func addingContext(_ extra: [String]) -> GeminiConfiguration {
-        let merged = TurnContext.merge(context: extra, saved: vocabulary, limit: Self.vocabularyLimit)
-        guard merged != vocabulary else { return self }
-        var copy = self
-        copy.vocabulary = merged
-        return copy
-    }
 }
 
 /// Pure message shaping for both Gemini endpoints. Kept free of I/O so every
@@ -54,13 +43,12 @@ public enum GeminiMessage {
     public static let unaryURL = URL(string: "https://generativelanguage.googleapis.com/v1beta/interactions")!
 
     public static func setup(_ config: GeminiConfiguration) -> Data {
-        var transcription: [String: Any] = [
+        let transcription: [String: Any] = [
             "languageCodes": config.languageCodes,
             "mode": config.mode == .smart ? "SMART" : "VERBATIM",
         ]
-        if !config.vocabulary.isEmpty {
-            transcription["customVocabulary"] = config.vocabulary
-        }
+        // Vocabulary is not sent. Gemini treats the list as a phrase prior and
+        // will emit a term the speaker never said. Spelling help cannot insert words.
         let payload: [String: Any] = [
             "setup": [
                 "model": "models/\(config.liveModel)",
@@ -94,15 +82,12 @@ public enum GeminiMessage {
     }
 
     public static func unaryRequest(wav: Data, config: GeminiConfiguration) -> Data {
-        var transcriptionConfig: [String: Any] = [
+        let transcriptionConfig: [String: Any] = [
             "language_codes": config.languageCodes,
             // Interactions documents smart mode as the string "smart".
             // Verbatim stays an object because that is where its options live.
             "mode": config.mode == .smart ? "smart" : ["type": "verbatim"],
         ]
-        if !config.vocabulary.isEmpty {
-            transcriptionConfig["custom_vocabulary"] = config.vocabulary
-        }
         let payload: [String: Any] = [
             "model": config.unaryModel,
             "input": [
@@ -175,18 +160,17 @@ public struct GeminiTranscriber: Transcribing {
     public var providerName: String { "gemini" }
     public var modelName: String { configuration.unaryModel }
 
-    public func makeLiveSession(vocabulary: [String]) -> (any LiveTranscribing)? {
-        GeminiLiveSession(configuration: configuration.addingContext(vocabulary))
+    public func makeLiveSession() -> (any LiveTranscribing)? {
+        GeminiLiveSession(configuration: configuration)
     }
 
-    public func transcribe(wav: Data, vocabulary: [String]) async throws -> TranscriptionResult {
-        let active = configuration.addingContext(vocabulary)
+    public func transcribe(wav: Data) async throws -> TranscriptionResult {
         var request = URLRequest(url: GeminiMessage.unaryURL)
         request.httpMethod = "POST"
         request.timeoutInterval = 45
-        request.setValue(active.apiKey, forHTTPHeaderField: "x-goog-api-key")
+        request.setValue(configuration.apiKey, forHTTPHeaderField: "x-goog-api-key")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = GeminiMessage.unaryRequest(wav: wav, config: active)
+        request.httpBody = GeminiMessage.unaryRequest(wav: wav, config: configuration)
 
         let startedAt = Date()
         let data = try await client.send(request)

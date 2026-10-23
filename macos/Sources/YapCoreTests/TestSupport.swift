@@ -91,7 +91,6 @@ func allSuites() -> [Suite] {
         languageSuite(),
         geminiMessageSuite(),
         geminiLiveSuite(),
-        turnContextSuite(),
         pipelineSuite(),
         phoneLinkSuite(),
     ]
